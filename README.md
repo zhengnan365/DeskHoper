@@ -4,6 +4,10 @@
 
 MonitorSwitcher 主要用于在台式机和笔记本之间快速切换外接显示器输入源，并集成 Windows 投影控制。
 
+## 截图
+
+![MonitorSwitcher 主界面](docs/images/monitor-switcher-main.png)
+
 ## 功能
 
 - 台式机 / 笔记本一键切换
@@ -76,7 +80,7 @@ dotnet publish MonitorSwitch.csproj -c Release -r win-x64 --self-contained true
 
 ## License
 
-License 尚未指定。
+本项目采用 [MIT License](LICENSE) 开源。
 
 ## Disclaimer
 
