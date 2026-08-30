@@ -1,0 +1,151 @@
+using System.Collections.ObjectModel;
+using MonitorSwitch.Models;
+using MonitorSwitch.Services;
+
+namespace MonitorSwitch.ViewModels;
+
+public sealed class MainViewModel : ObservableObject, IAsyncDisposable
+{
+    private readonly DdcCiService _ddcCiService = new();
+    private readonly ProfileService _profileService = new();
+    private readonly MonitorPreferencesService _monitorPreferencesService = new();
+    private readonly IProjectionService _projectionService = new ProjectionService();
+    private readonly ProfileExecutionService _profileExecutionService;
+    private readonly MonitorDiscoveryService _discoveryService;
+    private readonly MonitorInputMapping _defaultInputMapping = new();
+    private readonly Dictionary<string, MonitorInputMapping> _activeMappings = new(StringComparer.Ordinal);
+    private string _status = "准备扫描显示器";
+    private bool _isSwitching;
+    private ProfileViewModel? _currentProfile;
+    private ProjectionMode? _currentProjectionMode;
+    private bool _isRefreshing;
+    private readonly IMonitorIdentificationPresenter? _identificationPresenter;
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
+    public MainViewModel(IMonitorIdentificationPresenter? identificationPresenter = null)
+    {
+        _identificationPresenter = identificationPresenter;
+        _discoveryService = new MonitorDiscoveryService(_ddcCiService);
+        _profileExecutionService = new ProfileExecutionService(_ddcCiService, _projectionService, _monitorPreferencesService);
+        RefreshCommand = new AsyncRelayCommand(RefreshAsync);
+        ProjectionModes = [new(ProjectionMode.Internal, "仅电脑屏幕", () => SetProjectionAsync(ProjectionMode.Internal)), new(ProjectionMode.Duplicate, "复制", () => SetProjectionAsync(ProjectionMode.Duplicate)), new(ProjectionMode.Extend, "扩展", () => SetProjectionAsync(ProjectionMode.Extend), true), new(ProjectionMode.External, "仅第二屏幕", () => SetProjectionAsync(ProjectionMode.External))];
+        SetInternalProjectionCommand = new AsyncRelayCommand(() => SetProjectionAsync(ProjectionMode.Internal));
+        SetDuplicateProjectionCommand = new AsyncRelayCommand(() => SetProjectionAsync(ProjectionMode.Duplicate));
+        SetExtendProjectionCommand = new AsyncRelayCommand(() => SetProjectionAsync(ProjectionMode.Extend));
+        SetExternalProjectionCommand = new AsyncRelayCommand(() => SetProjectionAsync(ProjectionMode.External));
+        DesktopSwitchCommand = new AsyncRelayCommand(() => SwitchNamedProfileAsync("台式机"));
+        LaptopSwitchCommand = new AsyncRelayCommand(() => SwitchNamedProfileAsync("笔记本"));
+        SwitchProfileCommand = new AsyncRelayCommand(parameter => parameter is ProfileViewModel profile ? ExecuteProfileAsync(profile) : Task.CompletedTask);
+        SetMonitorInputCommand = new AsyncRelayCommand(parameter => parameter is MonitorInputRequest request ? request.Monitor.SetInputValueAsync(request.Value) : Task.CompletedTask);
+        SetProjectionModeCommand = new AsyncRelayCommand(parameter => parameter is ProjectionMode mode ? SetProjectionAsync(mode) : Task.CompletedTask);
+        IdentifyMonitorsCommand = new AsyncRelayCommand(IdentifyMonitorsAsync);
+    }
+    public ObservableCollection<MonitorViewModel> Monitors { get; } = [];
+    public AsyncRelayCommand RefreshCommand { get; }
+    public AsyncRelayCommand SetInternalProjectionCommand { get; }
+    public AsyncRelayCommand SetDuplicateProjectionCommand { get; }
+    public AsyncRelayCommand SetExtendProjectionCommand { get; }
+    public AsyncRelayCommand SetExternalProjectionCommand { get; }
+    public AsyncRelayCommand DesktopSwitchCommand { get; }
+    public AsyncRelayCommand LaptopSwitchCommand { get; }
+    public AsyncRelayCommand SwitchProfileCommand { get; }
+    public AsyncRelayCommand SetMonitorInputCommand { get; }
+    public AsyncRelayCommand SetProjectionModeCommand { get; }
+    public AsyncRelayCommand IdentifyMonitorsCommand { get; }
+    public ObservableCollection<ProjectionModeViewModel> ProjectionModes { get; }
+    public string Status { get => _status; private set { if (SetProperty(ref _status, value)) { OnPropertyChanged(nameof(StatusMessage)); OnPropertyChanged(nameof(CurrentStatusText)); } } }
+    public string CurrentProjectionLabel => ProjectionModes.FirstOrDefault(x => x.IsSelected)?.Title ?? "模式未知";
+    public ObservableCollection<ProfileViewModel> Profiles { get; } = [];
+    public ProfileViewModel? CurrentProfile { get => _currentProfile; private set { if (SetProperty(ref _currentProfile, value)) { foreach (var profile in Profiles) profile.IsCurrent = profile == value; } } }
+    public ProjectionMode? CurrentProjectionMode { get => _currentProjectionMode; private set { if (SetProperty(ref _currentProjectionMode, value)) OnPropertyChanged(nameof(IsProjectionModeKnown)); } }
+    public bool IsProjectionModeKnown => CurrentProjectionMode.HasValue;
+    public bool IsSwitching { get => _isSwitching; private set => SetProperty(ref _isSwitching, value); }
+    public string StatusMessage => Status;
+    public string CurrentStatusText => Status;
+    public bool IsRefreshing { get => _isRefreshing; private set => SetProperty(ref _isRefreshing, value); }
+    private void UpdateSteadyStateStatus() { Status = CurrentProfile is not null ? $"当前：{CurrentProfile.Name}" : IsMixedProfileState ? "当前：混合输入" : Monitors.Count > 0 ? $"检测到 {Monitors.Count} 台显示器" : "已就绪"; }
+    public async Task RefreshAsync()
+    {
+        IsRefreshing = true;
+        Status = "正在检测显示器与 DDC/CI 状态…";
+        try { var scanned = (await _discoveryService.ScanAsync()).Select((device, index) => new MonitorDevice { Id = device.Id, StableId = device.StableId, FriendlyName = device.FriendlyName, CustomName = device.CustomName, Manufacturer = device.Manufacturer, Model = device.Model, SerialNumber = device.SerialNumber, DevicePath = device.DevicePath, WindowsDisplayName = device.WindowsDisplayName, HMonitor = device.HMonitor, PhysicalMonitorHandle = device.PhysicalMonitorHandle, CurrentInput = device.CurrentInput, IsDdcSupported = device.IsDdcSupported, DdcStatus = device.DdcStatus, DisplayNumber = index + 1, Bounds = device.Bounds }).ToList(); var savedPreferences = await _monitorPreferencesService.LoadAsync(); _activeMappings.Clear(); Monitors.Clear(); foreach (var device in scanned) { var pref = savedPreferences.FirstOrDefault(item => item.StableId == device.StableId); var mapping = pref?.InputMappings ?? _defaultInputMapping; _activeMappings[device.Id] = mapping; var enriched = new MonitorDevice { Id = device.Id, StableId = device.StableId, FriendlyName = device.FriendlyName, CustomName = pref?.CustomName ?? device.CustomName, Manufacturer = device.Manufacturer, Model = device.Model, SerialNumber = device.SerialNumber, DevicePath = device.DevicePath, WindowsDisplayName = device.WindowsDisplayName, HMonitor = device.HMonitor, PhysicalMonitorHandle = device.PhysicalMonitorHandle, CurrentInput = device.CurrentInput, IsDdcSupported = device.IsDdcSupported, DdcStatus = device.DdcStatus, DisplayNumber = device.DisplayNumber, Bounds = device.Bounds }; Monitors.Add(new MonitorViewModel(enriched, _ddcCiService, mapping, message => Status = message, _monitorPreferencesService)); } Profiles.Clear(); foreach (var profile in await _profileService.LoadOrCreateDefaultsAsync(scanned)) Profiles.Add(new ProfileViewModel(profile, ExecuteProfileAsync, _profileService) { ShortcutDisplayText = profile.Name == "台式机" ? "Ctrl + Alt + 1" : profile.Name == "笔记本" ? "Ctrl + Alt + 2" : "未设置" }); await RefreshProjectionModeAsync(); UpdateCurrentProfileFromInputs(); UpdateSteadyStateStatus(); }
+        catch (Exception ex) { Status = $"检测失败：{ex.Message}"; }
+        finally { IsRefreshing = false; }
+    }
+    private async Task SetProjectionAsync(ProjectionMode mode)
+    {
+        Status = $"正在切换到{GetProjectionName(mode)}…";
+        var result = await _projectionService.ApplyAsync(mode);
+        if (result.Succeeded)
+        {
+            if (result.AppliedMode is { } detectedMode) { SelectProjectionMode(detectedMode); Status = $"已切换到{GetProjectionName(detectedMode)}"; }
+            else { SelectProjectionMode(ProjectionMode.Unchanged); Status = $"Windows 已执行{GetProjectionName(mode)}，但当前模式未能检测"; }
+        }
+        else Status = $"投影模式切换失败：{result.ErrorMessage}";
+    }
+    private async Task RefreshProjectionModeAsync()
+    {
+        var mode = await _projectionService.RefreshCurrentModeAsync();
+        CurrentProjectionMode = mode;
+        foreach (var item in ProjectionModes) item.IsSelected = item.Mode == mode;
+        OnPropertyChanged(nameof(CurrentProjectionLabel));
+    }
+    private void SelectProjectionMode(ProjectionMode mode) { foreach (var item in ProjectionModes) item.IsSelected = item.Mode == mode; OnPropertyChanged(nameof(CurrentProjectionLabel)); }
+    private Task ExecuteProfileAsync(SwitchProfile profile) => ExecuteProfileAsync(Profiles.FirstOrDefault(item => item.Profile == profile) ?? new ProfileViewModel(profile, ExecuteProfileAsync));
+
+    private async Task ExecuteProfileAsync(ProfileViewModel profile)
+    {
+        if (IsSwitching) return;
+        IsSwitching = true;
+        try
+        {
+            Status = $"正在切换到{profile.Name}…";
+            var result = await _profileExecutionService.ApplyAsync(profile.Profile);
+            foreach (var monitor in Monitors)
+                if (result.InputResults.TryGetValue(monitor.Id, out var input) && input.Succeeded)
+                    await monitor.ReadInputCommand.ExecuteAsync();
+            profile.LastSwitchResult = result.InputResults.Values.All(x => x.Succeeded) ? "切换成功" : "部分显示器切换失败";
+            UpdateCurrentProfileFromInputs();
+            Status = $"已切换到{profile.Name}";
+        }
+        finally { IsSwitching = false; }
+    }
+
+    private Task SwitchNamedProfileAsync(string name) => Profiles.FirstOrDefault(p => p.Name == name) is { } profile ? ExecuteProfileAsync(profile) : Task.CompletedTask;
+
+    private void UpdateCurrentProfileFromInputs()
+    {
+        var values = Monitors.Where(m => m.IsDdcSupported).Select(m => m.CurrentInputValue).ToArray();
+        if (values.Length == 0 || values.Any(v => v is null)) { CurrentProfile = null; return; }
+        var value = values.Select(v => v!.Value).Distinct().ToArray();
+        CurrentProfile = value.Length == 1 ? Profiles.FirstOrDefault(ProfileMatchesCurrent) : null;
+    }
+    private bool ProfileMatchesCurrent(ProfileViewModel profile) => profile.Profile.Monitors.Count > 0 && profile.Profile.Monitors.All(target => Monitors.FirstOrDefault(m => m.Id == target.MonitorId)?.CurrentInputValue == ResolveTargetValue(target));
+    private uint ResolveTargetValue(SwitchProfileMonitor target) { if (target.InputKind is not { } kind || !_activeMappings.TryGetValue(target.MonitorId, out var mapping)) return target.Input; return kind switch { InputSourceKind.DisplayPort => mapping.DisplayPort, InputSourceKind.UsbC => mapping.UsbC, InputSourceKind.Hdmi when mapping.Hdmi is { } value => value, _ => target.Input }; }
+    public bool IsMixedProfileState => CurrentProfile is null && Monitors.Any(m => m.IsDdcSupported && m.CurrentInputValue.HasValue);
+    public IReadOnlyList<MonitorIdentificationTarget> IdentificationTargets => Monitors.Select(m => new MonitorIdentificationTarget(m.DisplayNumber, m.StableId, m.DisplayName, m.Bounds)).ToList();
+    private async Task IdentifyMonitorsAsync() { if (_identificationPresenter is null) { Status = "已生成显示器编号"; return; } await _identificationPresenter.ShowAsync(IdentificationTargets, TimeSpan.FromSeconds(1.8)); Status = "显示器标识已完成"; }
+    public AsyncRelayCommand RefreshMonitorsCommand => RefreshCommand;
+    private async Task SwitchAllAsync(string target, Func<MonitorViewModel, Task> switchMonitor)
+    {
+        if (Monitors.Count == 0) { Status = "尚未检测到显示器"; return; }
+        Status = $"正在切换到{target}…";
+        await Task.WhenAll(Monitors.Select(switchMonitor));
+        Status = $"已完成{target}切换请求";
+    }
+    private static string GetProjectionName(ProjectionMode mode) => mode switch { ProjectionMode.Internal => "仅电脑屏幕", ProjectionMode.Duplicate => "复制", ProjectionMode.Extend => "扩展", ProjectionMode.External => "仅第二屏幕", _ => "不修改" };
+    public async Task ShutdownAsync(TimeSpan timeout)
+    {
+        _lifetimeCancellation.Cancel();
+        if (_identificationPresenter is IDisposable presenter) presenter.Dispose();
+        await _ddcCiService.ShutdownAsync(timeout);
+    }
+    public void RequestShutdown()
+    {
+        _lifetimeCancellation.Cancel();
+        if (_identificationPresenter is IDisposable presenter) presenter.Dispose();
+        _ddcCiService.RequestShutdown();
+    }
+    public async ValueTask DisposeAsync() { await ShutdownAsync(TimeSpan.FromMilliseconds(350)); _lifetimeCancellation.Dispose(); }
+}
+
+public sealed record MonitorInputRequest(MonitorViewModel Monitor, uint Value);

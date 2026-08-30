@@ -1,0 +1,34 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Style TargetType="Button">
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+    <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
+    <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="14,9"/>
+    <Setter Property="MinHeight" Value="{StaticResource ControlHeight}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{StaticResource Radius6}" Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="Background" Value="{StaticResource SurfaceSecondaryBrush}"/></Trigger>
+            <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonBorder" Property="Background" Value="{StaticResource AccentSoftBrush}"/></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.5"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="GhostButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="Transparent"/><Setter Property="Padding" Value="8,6"/></Style>
+  <Style x:Key="CompactButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Padding" Value="10,6"/><Setter Property="MinHeight" Value="32"/><Setter Property="FontSize" Value="12"/></Style>
+  <Style x:Key="ProfileActionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="MinHeight" Value="36"/><Setter Property="Padding" Value="12,7"/></Style>
+  <Style x:Key="LearnButton" TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Background" Value="{StaticResource SurfaceSecondaryBrush}"/><Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/><Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="Padding" Value="10,6"/></Style>
+  <Style x:Key="InputSourceButton" TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Width" Value="72"/><Setter Property="Height" Value="34"/></Style>
+  <Style x:Key="InlineRenameTextBox" TargetType="TextBox" BasedOn="{StaticResource ProfileNameEditor}"><Setter Property="MinHeight" Value="32"/><Setter Property="VerticalContentAlignment" Value="Center"/></Style>
+  <Style x:Key="InlineRenameConfirmButton" TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Foreground" Value="{StaticResource SuccessBrush}"/><Setter Property="BorderBrush" Value="{StaticResource SuccessBrush}"/><Setter Property="Padding" Value="8,4"/></Style>
+  <Style x:Key="InlineRenameCancelButton" TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="Transparent"/><Setter Property="Padding" Value="8,4"/></Style>
+</ResourceDictionary>

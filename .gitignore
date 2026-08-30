@@ -1,0 +1,14 @@
+.dotnet/
+bin/
+obj/
+.vs/
+.superpowers/
+publish/
+logs/
+*.user
+*.suo
+*.zip
+*.tmp
+*.corrupt
+.codex/
+MonitorSwitcher-config/
