@@ -6,7 +6,7 @@ MonitorSwitcher 主要用于在台式机和笔记本之间快速切换外接显�
 
 ## 截图
 
-![MonitorSwitcher 主界面](docs/images/monitor-switcher-main.png)
+![MonitorSwitcher 主界面](docs/monitor-switcher-main.png)
 
 ## 功能
 
