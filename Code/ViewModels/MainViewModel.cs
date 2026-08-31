@@ -32,8 +32,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SetDuplicateProjectionCommand = new AsyncRelayCommand(() => SetProjectionAsync(ProjectionMode.Duplicate));
         SetExtendProjectionCommand = new AsyncRelayCommand(() => SetProjectionAsync(ProjectionMode.Extend));
         SetExternalProjectionCommand = new AsyncRelayCommand(() => SetProjectionAsync(ProjectionMode.External));
-        DesktopSwitchCommand = new AsyncRelayCommand(() => SwitchNamedProfileAsync("台式机"));
-        LaptopSwitchCommand = new AsyncRelayCommand(() => SwitchNamedProfileAsync("笔记本"));
+        DesktopSwitchCommand = new AsyncRelayCommand(() => SwitchDefaultProfileAsync("desktop", "台式机"));
+        LaptopSwitchCommand = new AsyncRelayCommand(() => SwitchDefaultProfileAsync("laptop", "笔记本"));
         SwitchProfileCommand = new AsyncRelayCommand(parameter => parameter is ProfileViewModel profile ? ExecuteProfileAsync(profile) : Task.CompletedTask);
         SetMonitorInputCommand = new AsyncRelayCommand(parameter => parameter is MonitorInputRequest request ? request.Monitor.SetInputValueAsync(request.Value) : Task.CompletedTask);
         SetProjectionModeCommand = new AsyncRelayCommand(parameter => parameter is ProjectionMode mode ? SetProjectionAsync(mode) : Task.CompletedTask);
@@ -67,7 +67,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         IsRefreshing = true;
         Status = "正在检测显示器与 DDC/CI 状态…";
-        try { var scanned = (await _discoveryService.ScanAsync()).Select((device, index) => new MonitorDevice { Id = device.Id, StableId = device.StableId, FriendlyName = device.FriendlyName, CustomName = device.CustomName, Manufacturer = device.Manufacturer, Model = device.Model, SerialNumber = device.SerialNumber, DevicePath = device.DevicePath, WindowsDisplayName = device.WindowsDisplayName, HMonitor = device.HMonitor, PhysicalMonitorHandle = device.PhysicalMonitorHandle, CurrentInput = device.CurrentInput, IsDdcSupported = device.IsDdcSupported, DdcStatus = device.DdcStatus, DisplayNumber = index + 1, Bounds = device.Bounds }).ToList(); var savedPreferences = await _monitorPreferencesService.LoadAsync(); _activeMappings.Clear(); Monitors.Clear(); foreach (var device in scanned) { var pref = savedPreferences.FirstOrDefault(item => item.StableId == device.StableId); var mapping = pref?.InputMappings ?? _defaultInputMapping; _activeMappings[device.Id] = mapping; var enriched = new MonitorDevice { Id = device.Id, StableId = device.StableId, FriendlyName = device.FriendlyName, CustomName = pref?.CustomName ?? device.CustomName, Manufacturer = device.Manufacturer, Model = device.Model, SerialNumber = device.SerialNumber, DevicePath = device.DevicePath, WindowsDisplayName = device.WindowsDisplayName, HMonitor = device.HMonitor, PhysicalMonitorHandle = device.PhysicalMonitorHandle, CurrentInput = device.CurrentInput, IsDdcSupported = device.IsDdcSupported, DdcStatus = device.DdcStatus, DisplayNumber = device.DisplayNumber, Bounds = device.Bounds }; Monitors.Add(new MonitorViewModel(enriched, _ddcCiService, mapping, message => Status = message, _monitorPreferencesService)); } Profiles.Clear(); foreach (var profile in await _profileService.LoadOrCreateDefaultsAsync(scanned)) Profiles.Add(new ProfileViewModel(profile, ExecuteProfileAsync, _profileService) { ShortcutDisplayText = profile.Name == "台式机" ? "Ctrl + Alt + 1" : profile.Name == "笔记本" ? "Ctrl + Alt + 2" : "未设置" }); await RefreshProjectionModeAsync(); UpdateCurrentProfileFromInputs(); UpdateSteadyStateStatus(); }
+        try { var scanned = (await _discoveryService.ScanAsync()).Select((device, index) => new MonitorDevice { Id = device.Id, StableId = device.StableId, FriendlyName = device.FriendlyName, CustomName = device.CustomName, Manufacturer = device.Manufacturer, Model = device.Model, SerialNumber = device.SerialNumber, DevicePath = device.DevicePath, WindowsDisplayName = device.WindowsDisplayName, HMonitor = device.HMonitor, PhysicalMonitorHandle = device.PhysicalMonitorHandle, CurrentInput = device.CurrentInput, IsDdcSupported = device.IsDdcSupported, DdcStatus = device.DdcStatus, DisplayNumber = index + 1, Bounds = device.Bounds }).ToList(); var savedPreferences = await _monitorPreferencesService.LoadAsync(); _activeMappings.Clear(); Monitors.Clear(); foreach (var device in scanned) { var pref = savedPreferences.FirstOrDefault(item => item.StableId == device.StableId); var mapping = pref?.InputMappings ?? _defaultInputMapping; _activeMappings[device.Id] = mapping; var enriched = new MonitorDevice { Id = device.Id, StableId = device.StableId, FriendlyName = device.FriendlyName, CustomName = pref?.CustomName ?? device.CustomName, Manufacturer = device.Manufacturer, Model = device.Model, SerialNumber = device.SerialNumber, DevicePath = device.DevicePath, WindowsDisplayName = device.WindowsDisplayName, HMonitor = device.HMonitor, PhysicalMonitorHandle = device.PhysicalMonitorHandle, CurrentInput = device.CurrentInput, IsDdcSupported = device.IsDdcSupported, DdcStatus = device.DdcStatus, DisplayNumber = device.DisplayNumber, Bounds = device.Bounds }; Monitors.Add(new MonitorViewModel(enriched, _ddcCiService, mapping, message => Status = message, _monitorPreferencesService)); } Profiles.Clear(); foreach (var profile in await _profileService.LoadOrCreateDefaultsAsync(scanned)) Profiles.Add(new ProfileViewModel(profile, ExecuteProfileAsync, _profileService, SaveCurrentInputsToProfileAsync) { ShortcutDisplayText = profile.Name == "台式机" ? "Ctrl + Alt + 1" : profile.Name == "笔记本" ? "Ctrl + Alt + 2" : "未设置" }); await RefreshProjectionModeAsync(); UpdateCurrentProfileFromInputs(); UpdateSteadyStateStatus(); }
         catch (Exception ex) { Status = $"检测失败：{ex.Message}"; }
         finally { IsRefreshing = false; }
     }
@@ -110,7 +110,27 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         finally { IsSwitching = false; }
     }
 
-    private Task SwitchNamedProfileAsync(string name) => Profiles.FirstOrDefault(p => p.Name == name) is { } profile ? ExecuteProfileAsync(profile) : Task.CompletedTask;
+    private Task SwitchDefaultProfileAsync(string id, string legacyName) => Profiles.FirstOrDefault(p => p.Profile.Id == id) is { } profile ? ExecuteProfileAsync(profile) : Profiles.FirstOrDefault(p => p.Name == legacyName) is { } legacy ? ExecuteProfileAsync(legacy) : Task.CompletedTask;
+    private async Task SaveCurrentInputsToProfileAsync(ProfileViewModel profile)
+    {
+        var candidates = Monitors.Where(m => m.IsDdcSupported && !string.IsNullOrWhiteSpace(m.StableId)).OrderBy(m => m.DisplayNumber).ToArray();
+        var targets = new List<SwitchProfileMonitor>();
+        foreach (var monitor in candidates)
+        {
+            var value = await monitor.ReadCurrentInputValueAsync();
+            if (value is null || !_activeMappings.TryGetValue(monitor.Id, out var mapping))
+            { Status = $"无法保存 {profile.Name}：{monitor.DisplayTitle} 当前输入未识别，请先学习输入源"; return; }
+            var source = mapping.ToSource(value.Value);
+            if (source == MonitorInputSource.Unknown) { Status = $"无法保存 {profile.Name}：{monitor.DisplayTitle} 当前输入未识别，请先学习输入源"; return; }
+            var kind = source switch { MonitorInputSource.DisplayPort => InputSourceKind.DisplayPort, MonitorInputSource.UsbC => InputSourceKind.UsbC, MonitorInputSource.Hdmi => InputSourceKind.Hdmi, _ => throw new InvalidOperationException() };
+            targets.Add(new SwitchProfileMonitor { StableId = monitor.StableId, InputKind = kind, Input = value.Value });
+        }
+        var updated = new SwitchProfile { Id = profile.Profile.Id, Name = profile.Name, ProjectionMode = profile.ProjectionMode, Monitors = targets };
+        await _profileService.UpdateAsync(updated);
+        profile.ReplaceProfile(updated);
+        UpdateCurrentProfileFromInputs();
+        Status = $"已保存 {profile.Name} 配置：{profile.ConnectionSummary}";
+    }
 
     private void UpdateCurrentProfileFromInputs()
     {
@@ -119,8 +139,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         var value = values.Select(v => v!.Value).Distinct().ToArray();
         CurrentProfile = value.Length == 1 ? Profiles.FirstOrDefault(ProfileMatchesCurrent) : null;
     }
-    private bool ProfileMatchesCurrent(ProfileViewModel profile) => profile.Profile.Monitors.Count > 0 && profile.Profile.Monitors.All(target => Monitors.FirstOrDefault(m => m.Id == target.MonitorId)?.CurrentInputValue == ResolveTargetValue(target));
-    private uint ResolveTargetValue(SwitchProfileMonitor target) { if (target.InputKind is not { } kind || !_activeMappings.TryGetValue(target.MonitorId, out var mapping)) return target.Input; return kind switch { InputSourceKind.DisplayPort => mapping.DisplayPort, InputSourceKind.UsbC => mapping.UsbC, InputSourceKind.Hdmi when mapping.Hdmi is { } value => value, _ => target.Input }; }
+    private bool ProfileMatchesCurrent(ProfileViewModel profile) => profile.Profile.Monitors.Count > 0 && profile.Profile.Monitors.All(target => Monitors.FirstOrDefault(m => m.Id == target.TargetId)?.CurrentInputValue == ResolveTargetValue(target));
+    private uint ResolveTargetValue(SwitchProfileMonitor target) { if (target.InputKind is not { } kind || !_activeMappings.TryGetValue(target.TargetId, out var mapping)) return target.Input; return kind switch { InputSourceKind.DisplayPort => mapping.DisplayPort, InputSourceKind.UsbC => mapping.UsbC, InputSourceKind.Hdmi when mapping.Hdmi is { } value => value, _ => target.Input }; }
     public bool IsMixedProfileState => CurrentProfile is null && Monitors.Any(m => m.IsDdcSupported && m.CurrentInputValue.HasValue);
     public IReadOnlyList<MonitorIdentificationTarget> IdentificationTargets => Monitors.Select(m => new MonitorIdentificationTarget(m.DisplayNumber, m.StableId, m.DisplayName, m.Bounds)).ToList();
     private async Task IdentifyMonitorsAsync() { if (_identificationPresenter is null) { Status = "已生成显示器编号"; return; } await _identificationPresenter.ShowAsync(IdentificationTargets, TimeSpan.FromSeconds(1.8)); Status = "显示器标识已完成"; }

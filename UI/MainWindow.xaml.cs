@@ -10,12 +10,15 @@ namespace MonitorSwitch.Views;
 
 public partial class MainWindow : Window
 {
+    public static readonly DependencyProperty DisplayStatusTextProperty = DependencyProperty.Register(nameof(DisplayStatusText), typeof(string), typeof(MainWindow), new PropertyMetadata(string.Empty));
     private readonly MainViewModel _viewModel;
     private HotkeyService? _hotkeys;
     private Point _monitorDragStart;
     private MonitorViewModel? _draggedMonitor;
     private readonly List<string> _monitorOrder = [];
-    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
+    private int _statusVersion;
+    public string DisplayStatusText { get => (string)GetValue(DisplayStatusTextProperty); private set => SetValue(DisplayStatusTextProperty, value); }
+    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         var source = (HwndSource)PresentationSource.FromVisual(this)!;
@@ -32,6 +35,19 @@ public partial class MainWindow : Window
         try { _hotkeys?.Dispose(); _ = AppLogger.ShutdownAsync("unregister hotkeys", stopwatch.ElapsedMilliseconds); }
         catch (Exception ex) { _ = AppLogger.ErrorAsync("[Shutdown] unregister hotkeys exception", ex); }
         _ = AppLogger.ShutdownAsync("main window close allowed", stopwatch.ElapsedMilliseconds);
+    }
+    private async void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(MainViewModel.CurrentStatusText)) return;
+        var version = ++_statusVersion;
+        var status = _viewModel.CurrentStatusText;
+        const string marker = "配置：";
+        var markerIndex = status.IndexOf(marker, StringComparison.Ordinal);
+        if (!status.StartsWith("已保存", StringComparison.Ordinal) || markerIndex < 0) { DisplayStatusText = status; return; }
+        DisplayStatusText = $"已保存：{status[(markerIndex + marker.Length)..]}";
+        await Task.Delay(TimeSpan.FromSeconds(1.8));
+        if (version != _statusVersion) return;
+        DisplayStatusText = _viewModel.CurrentProfile is { } profile ? $"当前：{profile.Name}" : _viewModel.IsMixedProfileState ? "当前：混合输入" : _viewModel.Monitors.Count > 0 ? $"检测到 {_viewModel.Monitors.Count} 台显示器" : "已就绪";
     }
     private void ProfileName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {

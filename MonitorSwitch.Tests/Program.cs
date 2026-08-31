@@ -28,6 +28,33 @@ var desktopVm = new ProfileViewModel(new SwitchProfile { Name = "台式机", Mon
 Assert(desktopVm.ConnectionSummary == "DP + DP", "Desktop ConnectionSummary 必须为 DP + DP");
 var laptopVm = new ProfileViewModel(new SwitchProfile { Name = "笔记本", Monitors = [new SwitchProfileMonitor { MonitorId = "1", InputKind = InputSourceKind.UsbC }, new SwitchProfileMonitor { MonitorId = "2", InputKind = InputSourceKind.UsbC }] }, _ => Task.CompletedTask);
 Assert(laptopVm.ConnectionSummary == "Type-C + Type-C", "Laptop ConnectionSummary 必须为 Type-C + Type-C");
+var mixedProfile = new SwitchProfile { Id = "laptop", Name = "笔记本", Monitors = [new SwitchProfileMonitor { StableId = "A", InputKind = InputSourceKind.Hdmi }, new SwitchProfileMonitor { StableId = "B", InputKind = InputSourceKind.UsbC }] };
+var perProfilePath = Path.Combine(Path.GetTempPath(), $"per-profile-{Guid.NewGuid():N}.json");
+var perPreferences = new MonitorPreferencesService(perProfilePath);
+await perPreferences.SetMappingAsync("A", new MonitorInputMapping { DisplayPort = 15, UsbC = 16, Hdmi = 18 });
+await perPreferences.SetMappingAsync("B", new MonitorInputMapping { DisplayPort = 15, UsbC = 19, Hdmi = 17 });
+var recordingDdc = new RecordingDdcCiService();
+await new ProfileExecutionService(recordingDdc, projection, perPreferences).ApplyAsync(mixedProfile);
+Assert(recordingDdc.Writes.TryGetValue("A", out var aValue) && aValue == 18 && recordingDdc.Writes.TryGetValue("B", out var bValue) && bValue == 19, "Per-monitor Profile 必须按 StableId 使用各自 learned mapping");
+File.Delete(perProfilePath);
+var legacyExecution = new RecordingDdcCiService();
+await new ProfileExecutionService(legacyExecution, projection).ApplyAsync(new SwitchProfile { Name = "legacy", Monitors = [new SwitchProfileMonitor { MonitorId = "A", Input = 16 }] });
+Assert(legacyExecution.Writes.TryGetValue("A", out var legacyValue) && legacyValue == 16, "Legacy raw Input=16 必须继续执行");
+var normalizePath = Path.Combine(Path.GetTempPath(), $"legacy-profile-{Guid.NewGuid():N}.json");
+await File.WriteAllTextAsync(normalizePath, "[{\"name\":\"legacy\",\"monitors\":[{\"monitorId\":\"DISPLAY2\",\"input\":16}]}]");
+var normalizedLegacy = (await new ProfileService(normalizePath).LoadAsync()).Single();
+Assert(normalizedLegacy.Monitors.Single().StableId is null && normalizedLegacy.Monitors.Single().MonitorId == "DISPLAY2", "临时 DISPLAY 编号不得迁移为 StableId");
+File.Delete(normalizePath);
+var renamePath = Path.Combine(Path.GetTempPath(), $"rename-profile-{Guid.NewGuid():N}.json");
+var renameService = new ProfileService(renamePath);
+var originalLaptop = new SwitchProfile { Id = "laptop", Name = "笔记本", Monitors = mixedProfile.Monitors };
+await renameService.SaveAsync([originalLaptop]);
+var renameVm = new ProfileViewModel(originalLaptop, _ => Task.CompletedTask, renameService);
+await renameVm.BeginRenameCommand.ExecuteAsync(); renameVm.EditableName = "ThinkPad"; await renameVm.CommitRenameCommand.ExecuteAsync();
+var renamedLaptop = (await renameService.LoadAsync()).Single();
+Assert(renamedLaptop.Id == "laptop" && renamedLaptop.Name == "ThinkPad" && renamedLaptop.Monitors.Count == 2, "Profile rename 必须保留 Id 和 per-monitor targets");
+File.Delete(renamePath);
+Assert(new ProfileViewModel(mixedProfile, _ => Task.CompletedTask).ConnectionSummary == "HDMI + Type-C", "Per-monitor ConnectionSummary 必须保留每台屏幕输入顺序");
 var prefPath = Path.Combine(Path.GetTempPath(), $"monitor-prefs-{Guid.NewGuid():N}.json");
 var prefService = new MonitorPreferencesService(prefPath);
 await prefService.RenameAsync("AOC|LEFT", "  左侧显示器  ");
@@ -62,6 +89,7 @@ Assert((await learningPrefs.GetAsync("AOC|LEARN"))!.InputMappings.DisplayPort ==
 File.Delete(learningPath);
 if (failures.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, failures));
 Console.WriteLine("Projection mode contract tests passed.");
+Console.WriteLine("Per-monitor profile contract tests passed.");
 Console.WriteLine("V2 monitor preferences/input learning contract tests passed.");
 
 void Assert(bool condition, string message) { if (!condition) failures.Add(message); }
@@ -88,4 +116,13 @@ sealed class FixedDdcCiService(uint value) : IDdcCiService
     public Task<IReadOnlyList<MonitorDevice>> RefreshAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<MonitorDevice>>([]);
     public Task<uint?> ReadInputAsync(string monitorId, CancellationToken cancellationToken = default) => Task.FromResult<uint?>(value);
     public Task<DdcOperationResult> SetInputAsync(string monitorId, uint inputValue, CancellationToken cancellationToken = default) => Task.FromResult(new DdcOperationResult(true, 1, 0, TimeSpan.Zero));
+}
+
+sealed class RecordingDdcCiService : IDdcCiService
+{
+    public Dictionary<string, uint> Writes { get; } = [];
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public Task<IReadOnlyList<MonitorDevice>> RefreshAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<MonitorDevice>>([]);
+    public Task<uint?> ReadInputAsync(string monitorId, CancellationToken cancellationToken = default) => Task.FromResult<uint?>(null);
+    public Task<DdcOperationResult> SetInputAsync(string monitorId, uint inputValue, CancellationToken cancellationToken = default) { Writes[monitorId] = inputValue; return Task.FromResult(new DdcOperationResult(true, 1, 0, TimeSpan.Zero)); }
 }

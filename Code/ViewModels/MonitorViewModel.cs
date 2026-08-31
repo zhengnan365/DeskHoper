@@ -83,6 +83,12 @@ public sealed class MonitorViewModel : ObservableObject
     public Task SwitchToUsbCAsync() => SetInputAsync(_inputMapping.UsbC, "Type-C");
     public Task SwitchToHdmiAsync() => _inputMapping.Hdmi is { } hdmi ? SetInputAsync(hdmi, "HDMI") : Task.CompletedTask;
     public Task SetInputValueAsync(uint value) => SetInputAsync(value, ToFriendlyInput(value));
+    public async Task<uint?> ReadCurrentInputValueAsync()
+    {
+        var value = await _ddcCiService.ReadInputAsync(Id);
+        if (value is { } current) { _currentInput = current; OnPropertyChanged(nameof(Input)); OnPropertyChanged(nameof(InputDisplayName)); OnPropertyChanged(nameof(CurrentInputValue)); }
+        return value;
+    }
     private async Task CommitRenameAsync() { if (!IsEditingName) return; var name = EditableName.Trim(); CustomName = name; if (_preferencesService is not null) await _preferencesService.RenameAsync(StableId, name); _renameOriginalName = name; IsEditingName = false; }
     private async Task LearnAsync(InputSourceKind kind) { if (_preferencesService is null) return; var result = await new InputLearningService(_ddcCiService, _preferencesService).LearnInputSourceAsync(StableId, kind); if (result.Success) { _inputMapping = (await _preferencesService.GetAsync(StableId))?.InputMappings ?? _inputMapping; OnPropertyChanged(nameof(DisplayPortMapping)); OnPropertyChanged(nameof(UsbCMapping)); OnPropertyChanged(nameof(HdmiMapping)); OnPropertyChanged(nameof(IsDisplayPortLearned)); OnPropertyChanged(nameof(IsUsbCLearned)); OnPropertyChanged(nameof(IsHdmiLearned)); OnPropertyChanged(nameof(CanSwitchToHdmi)); } _reportStatus(result.Success ? $"{Name} 已学习 {kind}={result.LearnedValue}" : result.ErrorMessage ?? "输入源学习失败"); }
     private async Task ResetMappingAsync() { if (_preferencesService is null) return; _inputMapping = await _preferencesService.ResetMappingAsync(StableId, Model); OnPropertyChanged(nameof(DisplayPortMapping)); OnPropertyChanged(nameof(UsbCMapping)); OnPropertyChanged(nameof(HdmiMapping)); OnPropertyChanged(nameof(IsDisplayPortLearned)); OnPropertyChanged(nameof(IsUsbCLearned)); OnPropertyChanged(nameof(IsHdmiLearned)); OnPropertyChanged(nameof(CanSwitchToHdmi)); _reportStatus($"{Name} 输入映射已恢复默认"); }

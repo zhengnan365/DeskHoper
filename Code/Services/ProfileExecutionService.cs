@@ -15,10 +15,10 @@ public sealed class ProfileExecutionService(IDdcCiService ddcCiService, IProject
             try
             {
                 var inputValue = await ResolveInputValueAsync(monitor, cancellationToken);
-                inputResults[monitor.MonitorId] = await ddcCiService.SetInputAsync(monitor.MonitorId, inputValue, cancellationToken);
+                inputResults[monitor.TargetId] = await ddcCiService.SetInputAsync(monitor.TargetId, inputValue, cancellationToken);
             }
             catch (OperationCanceledException) { throw; }
-            catch { inputResults[monitor.MonitorId] = new DdcOperationResult(false, 0, 0, TimeSpan.Zero); }
+            catch { inputResults[monitor.TargetId] = new DdcOperationResult(false, 0, 0, TimeSpan.Zero); }
         }
         ProjectionResult? projectionResult = null;
         if (profile.ProjectionMode is { } mode && mode != ProjectionMode.Unchanged)
@@ -34,7 +34,7 @@ public sealed class ProfileExecutionService(IDdcCiService ddcCiService, IProject
     {
         if (target.InputKind is not { } kind || preferencesService is null) return target.Input;
         var preferences = await preferencesService.LoadAsync(cancellationToken);
-        var mapping = preferences.FirstOrDefault(item => item.StableId == target.MonitorId)?.InputMappings ?? new MonitorInputMapping();
+        var mapping = preferences.FirstOrDefault(item => item.StableId == target.TargetId)?.InputMappings ?? new MonitorInputMapping();
         return kind switch
         {
             InputSourceKind.DisplayPort => mapping.DisplayPort,
