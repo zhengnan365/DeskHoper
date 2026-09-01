@@ -62,7 +62,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string StatusMessage => Status;
     public string CurrentStatusText => Status;
     public bool IsRefreshing { get => _isRefreshing; private set => SetProperty(ref _isRefreshing, value); }
-    private void UpdateSteadyStateStatus() { Status = CurrentProfile is not null ? $"当前：{CurrentProfile.Name}" : IsMixedProfileState ? "当前：混合输入" : Monitors.Count > 0 ? $"检测到 {Monitors.Count} 台显示器" : "已就绪"; }
+    private void UpdateSteadyStateStatus() { Status = CurrentProfile is not null ? $"当前：{CurrentProfile.DisplayName}" : Monitors.Any(m => m.IsDdcSupported && m.CurrentInputValue.HasValue) ? "当前：自定义组合" : "已就绪"; }
     public async Task RefreshAsync()
     {
         IsRefreshing = true;
@@ -134,14 +134,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void UpdateCurrentProfileFromInputs()
     {
-        var values = Monitors.Where(m => m.IsDdcSupported).Select(m => m.CurrentInputValue).ToArray();
-        if (values.Length == 0 || values.Any(v => v is null)) { CurrentProfile = null; return; }
-        var value = values.Select(v => v!.Value).Distinct().ToArray();
-        CurrentProfile = value.Length == 1 ? Profiles.FirstOrDefault(ProfileMatchesCurrent) : null;
+        var current = Monitors.Where(m => m.IsDdcSupported).ToDictionary(m => m.StableId, m => m.CurrentInputValue, StringComparer.Ordinal);
+        CurrentProfile = Profiles.FirstOrDefault(profile => ProfileStateMatcher.Matches(profile.Profile, current, _activeMappings));
     }
-    private bool ProfileMatchesCurrent(ProfileViewModel profile) => profile.Profile.Monitors.Count > 0 && profile.Profile.Monitors.All(target => Monitors.FirstOrDefault(m => m.Id == target.TargetId)?.CurrentInputValue == ResolveTargetValue(target));
-    private uint ResolveTargetValue(SwitchProfileMonitor target) { if (target.InputKind is not { } kind || !_activeMappings.TryGetValue(target.TargetId, out var mapping)) return target.Input; return kind switch { InputSourceKind.DisplayPort => mapping.DisplayPort, InputSourceKind.UsbC => mapping.UsbC, InputSourceKind.Hdmi when mapping.Hdmi is { } value => value, _ => target.Input }; }
-    public bool IsMixedProfileState => CurrentProfile is null && Monitors.Any(m => m.IsDdcSupported && m.CurrentInputValue.HasValue);
+    public bool IsMixedProfileState => false;
     public IReadOnlyList<MonitorIdentificationTarget> IdentificationTargets => Monitors.Select(m => new MonitorIdentificationTarget(m.DisplayNumber, m.StableId, m.DisplayName, m.Bounds)).ToList();
     private async Task IdentifyMonitorsAsync() { if (_identificationPresenter is null) { Status = "已生成显示器编号"; return; } await _identificationPresenter.ShowAsync(IdentificationTargets, TimeSpan.FromSeconds(1.8)); Status = "显示器标识已完成"; }
     public AsyncRelayCommand RefreshMonitorsCommand => RefreshCommand;

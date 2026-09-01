@@ -11,7 +11,8 @@
     <Setter Property="Padding" Value="16,12"/>
     <Setter Property="CornerRadius" Value="{StaticResource Radius8}"/>
     <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-    <Style.Triggers><DataTrigger Binding="{Binding IsCurrent}" Value="True"><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/></DataTrigger></Style.Triggers>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Style.Triggers><DataTrigger Binding="{Binding IsCurrent}" Value="True"><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/><Setter Property="BorderThickness" Value="1.5"/><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/></DataTrigger></Style.Triggers>
   </Style>
   <Style x:Key="MonitorCard" TargetType="Border" BasedOn="{StaticResource SurfaceCard}">
     <Setter Property="Padding" Value="18,8,18,14"/>

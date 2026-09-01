@@ -4,6 +4,15 @@
 
 MonitorSwitcher 主要用于在台式机和笔记本之间快速切换外接显示器输入源，并集成 Windows 投影控制。
 
+## v2.1.0
+
+- Profile 右键支持“保存当前配置”，可将当前外接屏输入组合写回台式机或笔记本场景
+- 当前 Profile 状态高亮与绿色状态点
+- 外接显示器卡片支持 UI 内拖拽排序，不影响 Windows 显示器编号、拓扑或 Profile 关系
+- 输入源学习、每台显示器独立映射与 HDMI 切换
+
+发布包：`MonitorSwitcher-v2.1.0-win-x64.zip`，内含 self-contained 单文件版本，无需单独安装 .NET Runtime。
+
 ## 截图
 
 ![MonitorSwitcher 主界面](docs/monitor-switcher-main.png)
