@@ -11,10 +11,12 @@ public sealed class ProjectionService : IProjectionService
 
     public async Task<ProjectionMode?> RefreshCurrentModeAsync(CancellationToken cancellationToken = default)
     {
-        CurrentMode = await Task.Run(() => DetectCurrentMode(cancellationToken), cancellationToken);
+        CurrentMode = await Task.Run(() => TakeSnapshot(cancellationToken).Mode, cancellationToken);
         await AppLogger.InfoAsync($"QueryDisplayConfig topology={(CurrentMode?.ToString() ?? "Unknown")}");
         return CurrentMode;
     }
+
+    public Task<TopologySnapshot> GetTopologySnapshotAsync(CancellationToken cancellationToken = default) => Task.Run(() => TakeSnapshot(cancellationToken), cancellationToken);
 
     public async Task<ProjectionResult> ApplyAsync(ProjectionMode mode, CancellationToken cancellationToken = default)
     {
@@ -50,20 +52,22 @@ public sealed class ProjectionService : IProjectionService
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
 
-    private static ProjectionMode? DetectCurrentMode(CancellationToken cancellationToken)
+    private static TopologySnapshot TakeSnapshot(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (DisplayConfig.GetDisplayConfigBufferSizes(DisplayConfig.QueryDatabaseCurrent, out var pathCount, out var modeCount) != 0) return null;
+        if (DisplayConfig.GetDisplayConfigBufferSizes(DisplayConfig.QueryDatabaseCurrent, out var pathCount, out var modeCount) != 0) return TopologySnapshot.Unknown;
         var paths = new DisplayConfig.PathInfo[pathCount];
-        var modes = Enumerable.Range(0, (int)modeCount).Select(_ => new DisplayConfig.ModeInfo { Details = new byte[48] }).ToArray();
-        if (DisplayConfig.QueryDisplayConfig(DisplayConfig.QueryDatabaseCurrent, ref pathCount, paths, ref modeCount, modes, out var topology) != 0) return null;
-        return topology switch
+        var modes = new DisplayConfig.ModeInfo[modeCount];
+        for (var index = 0; index < modeCount; index++) modes[index] = new DisplayConfig.ModeInfo { Details = new byte[48] };
+        if (DisplayConfig.QueryDisplayConfig(DisplayConfig.QueryDatabaseCurrent, ref pathCount, paths, ref modeCount, modes, out var topologyId) != 0) return TopologySnapshot.Unknown;
+        var mode = topologyId switch
         {
             1 => ProjectionMode.Internal,
             2 => ProjectionMode.Duplicate,
             4 => ProjectionMode.Extend,
             8 => ProjectionMode.External,
-            _ => null
+            _ => (ProjectionMode?)null
         };
+        return new TopologySnapshot(mode, paths.Take((int)pathCount).Count(path => (path.Flags & DisplayConfig.PathIsActive) != 0));
     }
 }

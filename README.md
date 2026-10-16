@@ -4,6 +4,14 @@
 
 MonitorSwitcher 主要用于在台式机和笔记本之间快速切换外接显示器输入源，并集成 Windows 投影控制。
 
+## v2.1.1
+
+- 场景切换更快：去掉原先写死的 750ms 显示器重连等待，改为等待 Windows 显示拓扑稳定，实测单次切换从 ~1050ms 降到 ~520ms
+- 刷新更快：显示器硬件身份（WMI/EDID）改为跨刷新缓存，第二次及以后刷新不再重复查询
+- 显示器卡片改为逐台增量更新，不再整表重建，刷新时不再闪动
+- 发布包体积 155MB → 140MB（只保留中文资源目录）
+- 发布形态变化：不再是单个 exe，而是 `MonitorSwitcher.exe` + 5 个 WPF 原生 dll，**需要整个文件夹一起使用**（好处是不再往临时目录解压，首次启动更快）
+
 ## v2.1.0
 
 - Profile 右键支持“保存当前配置”，可将当前外接屏输入组合写回台式机或笔记本场景
@@ -11,7 +19,7 @@ MonitorSwitcher 主要用于在台式机和笔记本之间快速切换外接显�
 - 外接显示器卡片支持 UI 内拖拽排序，不影响 Windows 显示器编号、拓扑或 Profile 关系
 - 输入源学习、每台显示器独立映射与 HDMI 切换
 
-发布包：`MonitorSwitcher-v2.1.0-win-x64.zip`，内含 self-contained 单文件版本，无需单独安装 .NET Runtime。
+发布包：`MonitorSwitcher-v2.1.1-win-x64.zip`，self-contained，解压后整个文件夹一起使用，无需单独安装 .NET Runtime。
 
 ## 截图
 
@@ -39,7 +47,7 @@ MonitorSwitcher 主要用于在台式机和笔记本之间快速切换外接显�
 - 支持 DDC/CI 的外接显示器
 - 显示器 OSD 中已开启 DDC/CI
 
-软件使用 .NET 8 WPF 开发。GitHub Release 提供 self-contained win-x64 版本，正常情况下无需单独安装 .NET Runtime。
+软件使用 .NET 8 WPF 开发。GitHub Release 提供 self-contained win-x64 版本，正常情况下无需单独安装 .NET Runtime。发布包内除 `MonitorSwitcher.exe` 外还有 5 个 WPF 原生 dll（`wpfgfx_cor3.dll`、`PresentationNative_cor3.dll`、`D3DCompiler_47_cor3.dll`、`PenImc_cor3.dll`、`vcruntime140_cor3.dll`），请与 exe 放在同一目录，不要单独移动 exe。
 
 ## 使用方法
 
@@ -84,8 +92,12 @@ MonitorSwitcher 理论上适用于支持标准 DDC/CI Input Select VCP 的显示
 ```powershell
 dotnet build MonitorSwitch.sln
 dotnet build MonitorSwitch.sln -c Release
-dotnet publish MonitorSwitch.csproj -c Release -r win-x64 --self-contained true
+dotnet publish MonitorSwitch.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
+
+发布结果在 `publish\<rid>\` 下：`MonitorSwitcher.exe` + 5 个原生 dll，打包整个目录（配置目录 `MonitorSwitcher-config` 由程序首次运行时在 exe 旁创建，不要打进发布包）。
+
+多语言资源裁剪（只保留 `zh-Hans`，省 14MB）已写在 `MonitorSwitch.csproj` 的 `<SatelliteResourceLanguages>` 里，无需在命令行重复指定。
 
 ## License
 

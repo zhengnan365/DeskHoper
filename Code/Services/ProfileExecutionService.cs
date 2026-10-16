@@ -4,7 +4,10 @@ namespace MonitorSwitch.Services;
 
 public sealed class ProfileExecutionService(IDdcCiService ddcCiService, IProjectionService projectionService, MonitorPreferencesService? preferencesService = null)
 {
-    public const int DisplayReconnectDelayMs = 750;
+    public const int MaxDisplayReconnectWaitMs = 750;
+    private const int DisplaySettleFloorMs = 200;
+    private const int DisplaySettlePollMs = 60;
+    private const int DisplaySettleStableReads = 2;
 
     public async Task<ProfileExecutionResult> ApplyAsync(SwitchProfile profile, CancellationToken cancellationToken = default)
     {
@@ -23,11 +26,27 @@ public sealed class ProfileExecutionService(IDdcCiService ddcCiService, IProject
         ProjectionResult? projectionResult = null;
         if (profile.ProjectionMode is { } mode && mode != ProjectionMode.Unchanged)
         {
-            if (profile.Monitors.Count > 0) await Task.Delay(TimeSpan.FromMilliseconds(DisplayReconnectDelayMs), cancellationToken);
+            if (profile.Monitors.Count > 0) await WaitForDisplaySettledAsync(cancellationToken);
             projectionResult = await projectionService.ApplyAsync(mode, cancellationToken);
         }
         _ = AppLogger.PerfAsync($"Profile switch name={profile.Name} totalMs={stopwatch.ElapsedMilliseconds}");
         return new ProfileExecutionResult(inputResults, projectionResult);
+    }
+
+    private async Task WaitForDisplaySettledAsync(CancellationToken cancellationToken)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var previous = await projectionService.GetTopologySnapshotAsync(cancellationToken);
+        var stableReads = 0;
+        while (stopwatch.ElapsedMilliseconds < MaxDisplayReconnectWaitMs && stableReads < DisplaySettleStableReads)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(DisplaySettlePollMs), cancellationToken);
+            var current = await projectionService.GetTopologySnapshotAsync(cancellationToken);
+            stableReads = current == previous ? stableReads + 1 : 0;
+            previous = current;
+        }
+        if (stopwatch.ElapsedMilliseconds < DisplaySettleFloorMs) await Task.Delay(TimeSpan.FromMilliseconds(DisplaySettleFloorMs - stopwatch.ElapsedMilliseconds), cancellationToken);
+        _ = AppLogger.PerfAsync($"Display settle waitMs={stopwatch.ElapsedMilliseconds} snapshot={previous}");
     }
 
     private async Task<uint> ResolveInputValueAsync(SwitchProfileMonitor target, CancellationToken cancellationToken)

@@ -5,7 +5,7 @@ namespace MonitorSwitch.ViewModels;
 
 public sealed class MonitorViewModel : ObservableObject
 {
-    private readonly MonitorDevice _device;
+    private MonitorDevice _device;
     private readonly IDdcCiService _ddcCiService;
     private MonitorInputMapping _inputMapping;
     private readonly Action<string> _reportStatus;
@@ -36,6 +36,21 @@ public sealed class MonitorViewModel : ObservableObject
         BeginRenameCommand = new AsyncRelayCommand(() => { if (!IsEditingName) { _renameOriginalName = CustomName; EditableName = CustomName; IsEditingName = true; } return Task.CompletedTask; });
         CommitRenameCommand = new AsyncRelayCommand(CommitRenameAsync);
         CancelRenameCommand = new AsyncRelayCommand(() => { if (IsEditingName) { EditableName = _renameOriginalName; CustomName = _renameOriginalName; IsEditingName = false; } return Task.CompletedTask; });
+    }
+
+    public void UpdateFrom(MonitorDevice device, MonitorInputMapping mapping)
+    {
+        _device = device;
+        _inputMapping = mapping;
+        if (!IsEditingName && !string.Equals(_customName, device.CustomName, StringComparison.Ordinal)) _customName = device.CustomName;
+        _currentInput = device.CurrentInput;
+        foreach (var property in new[]
+        {
+            nameof(CustomName), nameof(Name), nameof(DisplayTitle), nameof(ModelSubtitle), nameof(Model), nameof(DisplayName), nameof(Identity),
+            nameof(Input), nameof(InputDisplayName), nameof(CurrentInputValue), nameof(IsOnline), nameof(IsDdcSupported), nameof(DdcStatus), nameof(DisplayNumber), nameof(Bounds), nameof(EditableName),
+            nameof(DisplayPortMapping), nameof(UsbCMapping), nameof(HdmiMapping), nameof(CanSwitchToDisplayPort), nameof(CanSwitchToUsbC), nameof(CanSwitchToHdmi),
+            nameof(IsDisplayPortLearned), nameof(IsUsbCLearned), nameof(IsHdmiLearned)
+        }) OnPropertyChanged(property);
     }
 
     public string Id => _device.Id;

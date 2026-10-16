@@ -1,6 +1,6 @@
 namespace MonitorSwitch.Models;
 
-public sealed class MonitorDevice
+public sealed record MonitorDevice
 {
     public required string Id { get; init; }
     public string? StableId { get; init; }

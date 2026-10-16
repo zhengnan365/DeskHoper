@@ -8,3 +8,8 @@ public enum ProjectionMode
     Extend,
     External
 }
+
+public readonly record struct TopologySnapshot(ProjectionMode? Mode, int ActivePathCount)
+{
+    public static TopologySnapshot Unknown { get; } = new(null, 0);
+}

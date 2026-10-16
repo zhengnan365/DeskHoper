@@ -67,9 +67,50 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         IsRefreshing = true;
         Status = "正在检测显示器与 DDC/CI 状态…";
-        try { var scanned = (await _discoveryService.ScanAsync()).Select((device, index) => new MonitorDevice { Id = device.Id, StableId = device.StableId, FriendlyName = device.FriendlyName, CustomName = device.CustomName, Manufacturer = device.Manufacturer, Model = device.Model, SerialNumber = device.SerialNumber, DevicePath = device.DevicePath, WindowsDisplayName = device.WindowsDisplayName, HMonitor = device.HMonitor, PhysicalMonitorHandle = device.PhysicalMonitorHandle, CurrentInput = device.CurrentInput, IsDdcSupported = device.IsDdcSupported, DdcStatus = device.DdcStatus, DisplayNumber = index + 1, Bounds = device.Bounds }).ToList(); var savedPreferences = await _monitorPreferencesService.LoadAsync(); _activeMappings.Clear(); Monitors.Clear(); foreach (var device in scanned) { var pref = savedPreferences.FirstOrDefault(item => item.StableId == device.StableId); var mapping = pref?.InputMappings ?? _defaultInputMapping; _activeMappings[device.Id] = mapping; var enriched = new MonitorDevice { Id = device.Id, StableId = device.StableId, FriendlyName = device.FriendlyName, CustomName = pref?.CustomName ?? device.CustomName, Manufacturer = device.Manufacturer, Model = device.Model, SerialNumber = device.SerialNumber, DevicePath = device.DevicePath, WindowsDisplayName = device.WindowsDisplayName, HMonitor = device.HMonitor, PhysicalMonitorHandle = device.PhysicalMonitorHandle, CurrentInput = device.CurrentInput, IsDdcSupported = device.IsDdcSupported, DdcStatus = device.DdcStatus, DisplayNumber = device.DisplayNumber, Bounds = device.Bounds }; Monitors.Add(new MonitorViewModel(enriched, _ddcCiService, mapping, message => Status = message, _monitorPreferencesService)); } Profiles.Clear(); foreach (var profile in await _profileService.LoadOrCreateDefaultsAsync(scanned)) Profiles.Add(new ProfileViewModel(profile, ExecuteProfileAsync, _profileService, SaveCurrentInputsToProfileAsync) { ShortcutDisplayText = profile.Name == "台式机" ? "Ctrl + Alt + 1" : profile.Name == "笔记本" ? "Ctrl + Alt + 2" : "未设置" }); await RefreshProjectionModeAsync(); UpdateCurrentProfileFromInputs(); UpdateSteadyStateStatus(); }
-        catch (Exception ex) { Status = $"检测失败：{ex.Message}"; }
+        try
+        {
+            var savedPreferences = await _monitorPreferencesService.LoadAsync();
+            _activeMappings.Clear();
+            _scannedKeys.Clear();
+            var scanned = await _discoveryService.ScanAsync(new Progress<MonitorDevice>(device => MergeMonitor(device, savedPreferences)));
+            for (var index = Monitors.Count - 1; index >= 0; index--) if (!_scannedKeys.Contains(Monitors[index].StableId)) Monitors.RemoveAt(index);
+            MergeProfiles(await _profileService.LoadOrCreateDefaultsAsync(scanned));
+            await RefreshProjectionModeAsync();
+            UpdateCurrentProfileFromInputs();
+            UpdateSteadyStateStatus();
+        }
+        catch (Exception ex) { Status = $"检测失败：{ex.Message}"; _ = AppLogger.ErrorAsync("Refresh failed", ex); }
         finally { IsRefreshing = false; }
+    }
+
+    private readonly HashSet<string> _scannedKeys = new(StringComparer.Ordinal);
+
+    // 每台显示器读完就上报，卡片逐台出现；合并时保留 ViewModel 实例，避免整表 Clear 让 ItemsControl 重建所有卡片。
+    private void MergeMonitor(MonitorDevice device, IReadOnlyList<MonitorPreferences> savedPreferences)
+    {
+        var key = device.StableId ?? device.Id;
+        var pref = savedPreferences.FirstOrDefault(item => item.StableId == device.StableId);
+        var mapping = pref?.InputMappings ?? _defaultInputMapping;
+        _activeMappings[device.Id] = mapping;
+        var enriched = device with { CustomName = pref?.CustomName ?? device.CustomName };
+        if (Monitors.FirstOrDefault(item => item.StableId == key) is { } existing) existing.UpdateFrom(enriched, mapping);
+        else Monitors.Add(new MonitorViewModel(enriched, _ddcCiService, mapping, message => Status = message, _monitorPreferencesService));
+        _scannedKeys.Add(key);
+    }
+
+    private void MergeProfiles(IReadOnlyList<SwitchProfile> profiles)
+    {
+        var existing = new Dictionary<string, ProfileViewModel>(StringComparer.Ordinal);
+        for (var index = 0; index < Profiles.Count; index++) existing[Profiles[index].Profile.Id ?? Profiles[index].Profile.Name] = Profiles[index];
+        var alive = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var profile in profiles)
+        {
+            var key = profile.Id ?? profile.Name;
+            if (!alive.Add(key)) continue;
+            if (existing.TryGetValue(key, out var viewModel)) viewModel.UpdateProfile(profile);
+            else Profiles.Add(new ProfileViewModel(profile, ExecuteProfileAsync, _profileService, SaveCurrentInputsToProfileAsync) { ShortcutDisplayText = profile.Name == "台式机" ? "Ctrl + Alt + 1" : profile.Name == "笔记本" ? "Ctrl + Alt + 2" : "未设置" });
+        }
+        for (var index = Profiles.Count - 1; index >= 0; index--) if (!alive.Contains(Profiles[index].Profile.Id ?? Profiles[index].Profile.Name)) Profiles.RemoveAt(index);
     }
     private async Task SetProjectionAsync(ProjectionMode mode)
     {

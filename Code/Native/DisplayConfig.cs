@@ -6,6 +6,7 @@ internal static class DisplayConfig
 {
     internal const uint QueryDatabaseCurrent = 0x00000004;
     internal const uint QueryOnlyActivePaths = 0x00000002;
+    internal const uint PathIsActive = 0x00000001;
     internal const uint GetSourceName = 1;
     internal const uint GetTargetName = 2;
 

@@ -102,7 +102,7 @@ void Assert(bool condition, string message) { if (!condition) failures.Add(messa
 sealed class FakeDdcCiService : IDdcCiService
 {
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    public Task<IReadOnlyList<MonitorDevice>> RefreshAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<MonitorDevice>>([]);
+    public Task<IReadOnlyList<MonitorDevice>> RefreshAsync(IProgress<MonitorDevice>? progress = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<MonitorDevice>>([]);
     public Task<uint?> ReadInputAsync(string monitorId, CancellationToken cancellationToken = default) => Task.FromResult<uint?>(null);
     public Task<DdcOperationResult> SetInputAsync(string monitorId, uint inputValue, CancellationToken cancellationToken = default) => Task.FromResult(new DdcOperationResult(true, 1, 0, TimeSpan.Zero));
 }
@@ -113,12 +113,13 @@ sealed class FakeProjectionService : IProjectionService
     public ProjectionMode? CurrentMode => null;
     public Task<ProjectionResult> ApplyAsync(ProjectionMode mode, CancellationToken cancellationToken = default) { WasCalled = true; return Task.FromResult(ProjectionResult.NoChange); }
     public Task<ProjectionMode?> RefreshCurrentModeAsync(CancellationToken cancellationToken = default) => Task.FromResult<ProjectionMode?>(null);
+    public Task<TopologySnapshot> GetTopologySnapshotAsync(CancellationToken cancellationToken = default) => Task.FromResult(new TopologySnapshot(ProjectionMode.Extend, 2));
 }
 
 sealed class FixedDdcCiService(uint value) : IDdcCiService
 {
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    public Task<IReadOnlyList<MonitorDevice>> RefreshAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<MonitorDevice>>([]);
+    public Task<IReadOnlyList<MonitorDevice>> RefreshAsync(IProgress<MonitorDevice>? progress = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<MonitorDevice>>([]);
     public Task<uint?> ReadInputAsync(string monitorId, CancellationToken cancellationToken = default) => Task.FromResult<uint?>(value);
     public Task<DdcOperationResult> SetInputAsync(string monitorId, uint inputValue, CancellationToken cancellationToken = default) => Task.FromResult(new DdcOperationResult(true, 1, 0, TimeSpan.Zero));
 }
@@ -127,7 +128,7 @@ sealed class RecordingDdcCiService : IDdcCiService
 {
     public Dictionary<string, uint> Writes { get; } = [];
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    public Task<IReadOnlyList<MonitorDevice>> RefreshAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<MonitorDevice>>([]);
+    public Task<IReadOnlyList<MonitorDevice>> RefreshAsync(IProgress<MonitorDevice>? progress = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<MonitorDevice>>([]);
     public Task<uint?> ReadInputAsync(string monitorId, CancellationToken cancellationToken = default) => Task.FromResult<uint?>(null);
     public Task<DdcOperationResult> SetInputAsync(string monitorId, uint inputValue, CancellationToken cancellationToken = default) { Writes[monitorId] = inputValue; return Task.FromResult(new DdcOperationResult(true, 1, 0, TimeSpan.Zero)); }
 }

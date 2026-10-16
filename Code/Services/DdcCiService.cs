@@ -12,10 +12,10 @@ public sealed class DdcCiService : IDdcCiService
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private bool _disposed;
 
-    public async Task<IReadOnlyList<MonitorDevice>> RefreshAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<MonitorDevice>> RefreshAsync(IProgress<MonitorDevice>? progress = null, CancellationToken cancellationToken = default)
     {
         await _operationGate.WaitAsync(cancellationToken);
-        try { return await Task.Run(() => RefreshCore(cancellationToken), cancellationToken); }
+        try { return await Task.Run(() => RefreshCore(progress, cancellationToken), cancellationToken); }
         finally { _operationGate.Release(); }
     }
 
@@ -51,7 +51,7 @@ public sealed class DdcCiService : IDdcCiService
         finally { _operationGate.Release(); }
     }
 
-    private IReadOnlyList<MonitorDevice> RefreshCore(CancellationToken cancellationToken)
+    private IReadOnlyList<MonitorDevice> RefreshCore(IProgress<MonitorDevice>? progress, CancellationToken cancellationToken)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         ThrowIfDisposed();
@@ -79,17 +79,14 @@ public sealed class DdcCiService : IDdcCiService
                         var physical = physicals[i];
                         var id = identity?.StableId ?? $"runtime|{displayName}|{physical.szPhysicalMonitorDescription}|{i}";
                         var lease = new PhysicalMonitorLease(physical);
-                        _leases.Add(id, lease);
+                        _leases[id] = lease;
                         adopted[i] = true;
+                        var bounds = new DisplayBounds(info.rcMonitor.Left, info.rcMonitor.Top, info.rcMonitor.Right - info.rcMonitor.Left, info.rcMonitor.Bottom - info.rcMonitor.Top);
                         var canRead = TryReadInput(lease.Handle, out var input);
-                        results.Add(new MonitorDevice
-                        {
-                            Id = id, StableId = identity?.StableId, FriendlyName = identity?.Model ?? physical.szPhysicalMonitorDescription, Manufacturer = identity?.Manufacturer, Model = identity?.Model ?? physical.szPhysicalMonitorDescription, SerialNumber = identity?.SerialNumber, DevicePath = identity?.DevicePath,
-                            WindowsDisplayName = displayName, HMonitor = hMonitor, PhysicalMonitorHandle = physical.hPhysicalMonitor,
-                            CurrentInput = canRead ? input : null, IsDdcSupported = canRead,
-                            DdcStatus = canRead ? "DDC/CI 可读取" : "DDC/CI 不可读取或当前不可用",
-                            Bounds = new DisplayBounds(info.rcMonitor.Left, info.rcMonitor.Top, info.rcMonitor.Right - info.rcMonitor.Left, info.rcMonitor.Bottom - info.rcMonitor.Top)
-                        });
+                        var settled = BuildDevice(id, identity, physical, displayName, hMonitor, bounds, results.Count + 1, canRead ? input : null, canRead, canRead ? "DDC/CI 可读取" : "DDC/CI 不可读取或当前不可用");
+                        results.Add(settled);
+                        if (results.Count == 1) _ = AppLogger.PerfAsync($"First monitor readyMs={stopwatch.ElapsedMilliseconds} display={displayName}");
+                        progress?.Report(settled);
                         _ = AppLogger.InfoAsync($"Monitor scan windowsDisplay={displayName} physicalName={physical.szPhysicalMonitorDescription} stableId={(identity?.StableId ?? "UNRESOLVED")} devicePath={(identity?.DevicePath ?? "UNRESOLVED")} ddcReadable={canRead} vcp60={(canRead ? input : 0)}");
                     }
                 }
@@ -103,6 +100,25 @@ public sealed class DdcCiService : IDdcCiService
         _ = AppLogger.InfoAsync($"Monitor scan complete physicalMonitorCount={results.Count}");
         return results;
     }
+
+    private static MonitorDevice BuildDevice(string id, MonitorHardwareIdentity? identity, Dxva2.PhysicalMonitor physical, string displayName, nint hMonitor, DisplayBounds bounds, int displayNumber, uint? currentInput, bool isDdcSupported, string ddcStatus) => new MonitorDevice
+    {
+        Id = id,
+        StableId = identity?.StableId,
+        FriendlyName = identity?.Model ?? physical.szPhysicalMonitorDescription,
+        Manufacturer = identity?.Manufacturer,
+        Model = identity?.Model ?? physical.szPhysicalMonitorDescription,
+        SerialNumber = identity?.SerialNumber,
+        DevicePath = identity?.DevicePath,
+        WindowsDisplayName = displayName,
+        HMonitor = hMonitor,
+        PhysicalMonitorHandle = physical.hPhysicalMonitor,
+        CurrentInput = currentInput,
+        IsDdcSupported = isDdcSupported,
+        DdcStatus = ddcStatus,
+        DisplayNumber = displayNumber,
+        Bounds = bounds
+    };
 
     private uint? ReadInputCore(string monitorId, CancellationToken cancellationToken)
     {

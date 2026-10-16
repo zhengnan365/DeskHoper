@@ -4,10 +4,10 @@
     <AssemblyName>MonitorSwitcher</AssemblyName>
     <Product>MonitorSwitcher</Product>
     <Title>MonitorSwitcher</Title>
-    <Version>2.1.0</Version>
-    <AssemblyVersion>2.1.0.0</AssemblyVersion>
-    <FileVersion>2.1.0.0</FileVersion>
-    <InformationalVersion>2.1.0</InformationalVersion>
+    <Version>2.1.1</Version>
+    <AssemblyVersion>2.1.1.0</AssemblyVersion>
+    <FileVersion>2.1.1.0</FileVersion>
+    <InformationalVersion>2.1.1</InformationalVersion>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
@@ -16,6 +16,8 @@
     <PlatformTarget>x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
     <ApplicationIcon>UI\Assets\MonitorSwitch.ico</ApplicationIcon>
+    <!-- 运行时包会带上 13 种语言的资源目录，实测 26MB；界面只有中文，保留 zh-Hans 可省 14.4MB -->
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="MonitorSwitch.Tests\**\*.cs" />

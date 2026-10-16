@@ -32,4 +32,5 @@ public sealed class ProfileViewModel : ObservableObject
     private async Task CommitRename() { if (!IsEditingName) return; var name = EditableName.Trim(); if (name.Length == 0) { EditableName = Name; IsEditingName = false; return; } var oldName = Profile.Name; Profile = new SwitchProfile { Id = Profile.Id, Name = name, Monitors = Profile.Monitors, ProjectionMode = Profile.ProjectionMode }; if (_profileService is not null) await _profileService.RenameAsync(oldName, Profile); IsEditingName = false; OnPropertyChanged(nameof(Name)); OnPropertyChanged(nameof(DisplayName)); }
     private Task CancelRename() { EditableName = Name; IsEditingName = false; return Task.CompletedTask; }
     internal void ReplaceProfile(SwitchProfile profile) { Profile = profile; OnPropertyChanged(nameof(ConnectionSummary)); }
+    internal void UpdateProfile(SwitchProfile profile) { Profile = profile; OnPropertyChanged(nameof(Name)); OnPropertyChanged(nameof(DisplayName)); OnPropertyChanged(nameof(ConnectionSummary)); OnPropertyChanged(nameof(ProjectionMode)); }
 }

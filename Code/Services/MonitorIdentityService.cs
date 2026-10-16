@@ -8,8 +8,10 @@ namespace MonitorSwitch.Services;
 public sealed class MonitorIdentityService
 {
     private readonly Dictionary<string, MonitorHardwareIdentity> _identityCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _unresolvedPaths = new(StringComparer.OrdinalIgnoreCase);
     private bool _cacheLoaded;
-    public void BeginScan() { _identityCache.Clear(); _cacheLoaded = false; }
+    private bool _refreshedAfterMiss;
+    public void BeginScan() => _refreshedAfterMiss = false;
     public MonitorHardwareIdentity? TryGetIdentity(string windowsDisplayName)
     {
         try
@@ -18,12 +20,27 @@ public sealed class MonitorIdentityService
             if (string.IsNullOrWhiteSpace(devicePath)) return null;
             var normalizedPath = NormalizeDevicePath(devicePath);
             EnsureWmiCache();
-            foreach (var cached in _identityCache)
+            var identity = FindCached(normalizedPath);
+            if (identity is null && !_refreshedAfterMiss && !_unresolvedPaths.Contains(normalizedPath))
             {
-                if (string.Equals(cached.Key, normalizedPath, StringComparison.OrdinalIgnoreCase) || cached.Key.StartsWith(normalizedPath + "_", StringComparison.OrdinalIgnoreCase)) return cached.Value with { DevicePath = devicePath };
+                // 只有没查过的设备路径才触发重查：热插拔进来的新显示器要能识别，而内置屏幕这类在 WmiMonitorID 里永远没有条目的路径不该每轮白查一次。
+                _refreshedAfterMiss = true;
+                _cacheLoaded = false;
+                EnsureWmiCache();
+                identity = FindCached(normalizedPath);
+                if (identity is null) _unresolvedPaths.Add(normalizedPath);
             }
+            if (identity is not null) return identity with { DevicePath = devicePath };
         }
         catch (Exception ex) { _ = AppLogger.ErrorAsync($"Monitor identity lookup failed for {windowsDisplayName}", ex); }
+        return null;
+    }
+
+    private MonitorHardwareIdentity? FindCached(string normalizedPath)
+    {
+        foreach (var cached in _identityCache)
+            if (string.Equals(cached.Key, normalizedPath, StringComparison.OrdinalIgnoreCase) || cached.Key.StartsWith(normalizedPath + "_", StringComparison.OrdinalIgnoreCase))
+                return cached.Value;
         return null;
     }
 
