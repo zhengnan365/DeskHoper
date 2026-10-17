@@ -173,6 +173,28 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         Status = $"已保存 {profile.Name} 配置：{profile.ConnectionSummary}";
     }
 
+    public async Task SaveProfileAsync(SwitchProfile profile)
+    {
+        var saved = await _profileService.LoadAsync();
+        if (saved.Any(item => item.Id == profile.Id)) await _profileService.UpdateAsync(profile);
+        else await _profileService.AddAsync(profile);
+        MergeProfiles(await _profileService.LoadAsync());
+        UpdateCurrentProfileFromInputs();
+        UpdateSteadyStateStatus();
+        Status = $"已保存：{profile.Name}";
+    }
+
+    public async Task DeleteProfileAsync(ProfileViewModel profile)
+    {
+        if (string.IsNullOrWhiteSpace(profile.Profile.Id)) return;
+        var name = profile.Name;
+        await _profileService.DeleteAsync(profile.Profile.Id);
+        MergeProfiles(await _profileService.LoadAsync());
+        UpdateCurrentProfileFromInputs();
+        UpdateSteadyStateStatus();
+        Status = $"已删除：{name}";
+    }
+
     private void UpdateCurrentProfileFromInputs()
     {
         var current = Monitors.Where(m => m.IsDdcSupported).ToDictionary(m => m.StableId, m => m.CurrentInputValue, StringComparer.Ordinal);

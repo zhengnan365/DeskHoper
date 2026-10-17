@@ -86,6 +86,28 @@ public partial class MainWindow : Window
         if (sender is FrameworkElement element && element.DataContext is not null)
             new InputLearningWindow { Owner = this, DataContext = element.DataContext }.ShowDialog();
     }
+    private void NewProfile_Click(object sender, RoutedEventArgs e) => ShowProfileEditor(null);
+    private void ProfileEdit_Click(object sender, RoutedEventArgs e) { if (ResolveProfile(sender) is { } profile) ShowProfileEditor(profile); }
+    private async void ShowProfileEditor(ProfileViewModel? profile)
+    {
+        if (_viewModel.Monitors.Count == 0) { MessageBox.Show(this, "还没有检测到显示器，请先点“刷新”。", "无法编辑", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        var editor = new ProfileEditViewModel(profile?.Profile, _viewModel.Monitors);
+        if (editor.Rows.Count == 0) { MessageBox.Show(this, "没有可以通过 DDC/CI 控制输入源的显示器。", "无法编辑", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        if (new ProfileEditWindow { Owner = this, DataContext = editor }.ShowDialog() != true) return;
+        await _viewModel.SaveProfileAsync(editor.Build());
+    }
+    private async void ProfileDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveProfile(sender) is not { } profile) return;
+        if (MessageBox.Show(this, $"确定删除“{profile.Name}”这个切换按钮？\n\n删除后，指向它的 Ctrl + Alt + 1 / 2 不再响应。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        await _viewModel.DeleteProfileAsync(profile);
+    }
+    private static ProfileViewModel? ResolveProfile(object? sender)
+    {
+        // 与“保存当前配置”“重命名”走同一条取值路径：菜单项的 DataContext 继承不可靠，一律从 PlacementTarget 拿。
+        if (sender is not MenuItem item) return null;
+        return (item.Parent as ContextMenu)?.PlacementTarget is FrameworkElement target ? target.DataContext as ProfileViewModel : null;
+    }
     private void ExternalMonitorFilter(object sender, FilterEventArgs e)
     {
         e.Accepted = e.Item is MonitorViewModel monitor && monitor.IsDdcSupported;

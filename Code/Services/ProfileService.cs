@@ -35,6 +35,20 @@ public sealed class ProfileService(string? filePath = null) : JsonFileService<Li
         var index = profiles.FindIndex(item => item.Id == profile.Id);
         if (index >= 0) { profiles[index] = profile; await SaveAsync(profiles, cancellationToken); }
     }
+
+    public async Task AddAsync(SwitchProfile profile, CancellationToken cancellationToken = default)
+    {
+        var profiles = (await LoadAsync(cancellationToken)).ToList();
+        profiles.Add(profile);
+        await SaveAsync(profiles, cancellationToken);
+    }
+
+    public async Task DeleteAsync(string profileId, CancellationToken cancellationToken = default)
+    {
+        var profiles = (await LoadAsync(cancellationToken)).ToList();
+        profiles.RemoveAll(item => item.Id == profileId);
+        await SaveAsync(profiles, cancellationToken);
+    }
     private static SwitchProfile Normalize(SwitchProfile profile) => new()
     {
         Id = string.IsNullOrWhiteSpace(profile.Id) ? profile.Name switch { "台式机" => "desktop", "笔记本" => "laptop", _ => Guid.NewGuid().ToString("N") } : profile.Id,
