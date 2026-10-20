@@ -63,6 +63,90 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string CurrentStatusText => Status;
     public bool IsRefreshing { get => _isRefreshing; private set => SetProperty(ref _isRefreshing, value); }
     private void UpdateSteadyStateStatus() { Status = CurrentProfile is not null ? $"当前：{CurrentProfile.DisplayName}" : Monitors.Any(m => m.IsDdcSupported && m.CurrentInputValue.HasValue) ? "当前：自定义组合" : "已就绪"; }
+    private readonly PeerSettingsService _peerSettingsService = new();
+    private PeerLink? _peerLink;
+    /// 对端推来的剪贴板文本。由界面赋成一个 Progress&lt;string&gt;，因此可以从后台线程安全回调。
+    public IProgress<string>? RemoteClipboardTextHandler { get; set; }
+    public event Action? PeerConnected;
+
+    private PeerLink EnsureLink()
+    {
+        if (_peerLink is not null) return _peerLink;
+        _peerLink = new PeerLink(_peerSettingsService, PeerIdentity.LoadOrCreate($"MonitorSwitcher Peer {Environment.MachineName}"));
+        _peerLink.StateChanged += OnPeerStateChanged;
+        _peerLink.TextReceived += text => RemoteClipboardTextHandler?.Report(text);
+        return _peerLink;
+    }
+
+    private void OnPeerStateChanged()
+    {
+        OnPropertyChanged(nameof(IsPeerConnected));
+        OnPropertyChanged(nameof(PeerStatusText));
+        if (_peerLink?.IsConnected == true) PeerConnected?.Invoke();
+    }
+
+    public void ReportStatus(string message) => Status = message;
+
+    public bool IsPeerConnected => _peerLink?.IsConnected == true;
+    public string? PeerError => _peerLink?.LastError;
+
+    public string PeerStatusText => _peerLink switch
+    {
+        null => "共享未启用",
+        _ when _peerLink.State == PeerLinkState.Connected => $"已连接：{_peerLink.RemoteName}",
+        _ when _peerLink.State == PeerLinkState.WaitingForPairing => $"等待配对，本机配对码 {_peerLink.LocalPairingCode}",
+        _ when _peerLink.State == PeerLinkState.Connecting => "正在连接对端…",
+        _ when _peerLink.State == PeerLinkState.Failed => $"上次连接失败：{_peerLink.LastError ?? "未知原因"}",
+        _ => "未配对"
+    };
+
+    /// 没有配对过就既不建证书也不监听端口，避免第一次启动就悄悄往用户证书存储里写东西。
+    public async Task StartPeerIfNeededAsync()
+    {
+        var settings = await _peerSettingsService.LoadAsync();
+        if (settings.PinnedPeers.Count == 0) return;
+        await EnsureLink().StartAsync();
+        OnPropertyChanged(nameof(PeerStatusText));
+    }
+
+    public async Task<string> ShowPairingCodeAsync()
+    {
+        var link = EnsureLink();
+        await link.StartAsync();
+        var code = link.BeginPairing();
+        OnPropertyChanged(nameof(PeerStatusText));
+        return code;
+    }
+
+    public void CancelPairing()
+    {
+        _peerLink?.CancelPairing();
+        OnPropertyChanged(nameof(PeerStatusText));
+    }
+
+    public async Task<bool> ConnectPeerAsync(string host, string code)
+    {
+        var link = EnsureLink();
+        await link.StartAsync();
+        var connected = await link.ConnectAsync(host, code);
+        OnPropertyChanged(nameof(PeerStatusText));
+        return connected;
+    }
+
+    public async Task DisconnectPeerAsync()
+    {
+        if (_peerLink is null) return;
+        await _peerLink.DisconnectAsync();
+        OnPropertyChanged(nameof(PeerStatusText));
+    }
+
+    public async Task SendClipboardTextAsync(string text)
+    {
+        var link = _peerLink;
+        if (link is null || !link.IsConnected) return;
+        if (await link.SendTextAsync(text)) await AppLogger.InfoAsync($"Clipboard synced to peer: {text.Length} chars");
+    }
+
     public async Task RefreshAsync()
     {
         IsRefreshing = true;
@@ -216,6 +300,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _lifetimeCancellation.Cancel();
         if (_identificationPresenter is IDisposable presenter) presenter.Dispose();
+        if (_peerLink is not null) { var link = _peerLink; _peerLink = null; await link.DisposeAsync(); }
         await _ddcCiService.ShutdownAsync(timeout);
     }
     public void RequestShutdown()

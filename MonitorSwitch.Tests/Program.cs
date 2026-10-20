@@ -111,6 +111,8 @@ Assert(rebuiltProfile.Id == "laptop" && rebuiltProfile.Name == "笔记本" && re
 var createdVm = new ProfileEditViewModel(null, [editorMonitor]);
 var createdProfile = createdVm.Build();
 Assert(createdVm.IsNew && createdProfile.Id is { Length: 32 } && createdProfile.ProjectionMode is null && createdProfile.Monitors[0].Input == 17, "新建按钮必须生成新 Id、默认不改投影，并预选显示器当前输入源");
+Assert(ClipboardSyncPolicy.HasChanged("abc", "ab") && !ClipboardSyncPolicy.HasChanged("abc", "abc") && !ClipboardSyncPolicy.HasChanged(null, "abc") && !ClipboardSyncPolicy.HasChanged(string.Empty, "abc"), "剪贴板只在内容真的变化时才同步，空内容和相同内容都不发（这也是防回声的依据）");
+Assert(!ClipboardSyncPolicy.IsTooLong(new string('x', ClipboardSyncPolicy.MaxTextLength)) && ClipboardSyncPolicy.IsTooLong(new string('x', ClipboardSyncPolicy.MaxTextLength + 1)), "剪贴板大小上限的边界判断必须准确");
 // ---------- 共享链路：同机回环真配对 ----------
 const int peerPort = 47899;
 const string peerSubjectA = "MonitorSwitcher Test A";
