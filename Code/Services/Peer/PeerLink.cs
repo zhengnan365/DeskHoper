@@ -59,7 +59,19 @@ public sealed class PeerLink : IAsyncDisposable
         Port = settings.Port;
         _lifetime = new CancellationTokenSource();
         _listener = new TcpListener(IPAddress.Any, settings.Port);
-        _listener.Start();
+        try
+        {
+            _listener.Start();
+        }
+        catch (SocketException ex)
+        {
+            // 端口被占用时必须只报告不能崩：界面此时已经显示出来了。
+            _listener = null;
+            LastError = $"端口 {settings.Port} 无法监听：{ex.Message}";
+            SetState(PeerLinkState.Failed);
+            await AppLogger.ErrorAsync("Peer listener failed to start", ex);
+            return;
+        }
         _ = AcceptLoopAsync(_lifetime.Token);
         if (settings.AutoReconnect && !string.IsNullOrWhiteSpace(settings.LastPeerHost) && settings.PinnedPeers.Count > 0)
             _ = ReconnectLoopAsync(settings.LastPeerHost!, _lifetime.Token);
