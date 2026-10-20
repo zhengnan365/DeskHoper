@@ -35,7 +35,7 @@
       <StackPanel>
         <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="Sharing"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
         <TextBlock Text="剪贴板与文件共享" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
-        <TextBlock Text="只有本程序运行时才共享，关掉软件就停止。两台电脑都装同一个程序。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+        <TextBlock Text="只在程序运行时共享。两台电脑装同一个程序。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
         <Border Style="{StaticResource SectionCard}">
           <StackPanel>
             <TextBlock Text="当前状态" Style="{StaticResource CardHeader}"/>
@@ -49,7 +49,6 @@
             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="连接状态" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="{Binding PeerStatusText}" Style="{StaticResource BodyText}" HorizontalAlignment="Right" TextTrimming="CharacterEllipsis" MaxWidth="240" TextAlignment="Right" Margin="0,0,10,0"/>
               <Button Grid.Column="2" Content="断开" Command="{Binding DisconnectPeerCommand}"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="Padding" Value="8,4"/><Style.Triggers><DataTrigger Binding="{Binding IsPeerConnected}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
             </Grid>
-            <TextBlock Text="名字右键可以改，改完对方设备列表里看到的就是新名字。" Style="{StaticResource CaptionText}" Margin="0,8,0,0"/>
           </StackPanel>
         </Border>
         <StackPanel>
@@ -67,7 +66,6 @@
                   <Button Grid.Column="1" Content="取消" Command="{Binding CancelPairingCodeCommand}" Style="{StaticResource CompactButton}" VerticalAlignment="Top"/>
                 </Grid>
               </Border>
-              <TextBlock Text="对方在他自己的“我连接对方”里填你的本机名称和这个配对码。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
             </StackPanel>
           </Border>
           <Border Style="{StaticResource SectionCard}">
@@ -77,14 +75,13 @@
               <ItemsControl ItemsSource="{Binding DiscoveredPeers}" Margin="0,0,0,6"><ItemsControl.ItemTemplate><DataTemplate>
                 <Button Command="{Binding DataContext.SelectPeerCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" Style="{StaticResource PeerRowButton}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Name}" Style="{StaticResource BodyText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="{Binding Address}" Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="12,0,0,0"/></Grid></Button>
               </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
-              <TextBlock Text="暂时没发现其他设备。两台电脑都要开着本程序，并且连在同一个网络里。" Margin="0,0,0,6">
+              <TextBlock Text="没发现其他设备：两台都要开着程序，并连在同一个网络。" Margin="0,0,0,6">
                 <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource CaptionText}"><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Margin" Value="0,0,0,6"/><Style.Triggers><DataTrigger Binding="{Binding HasDiscoveredPeers}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
               </TextBlock>
               <Grid Margin="0,0,0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                <TextBlock Text="对端地址" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
+                <TextBlock Text="名称或 IP" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
                 <TextBox Grid.Column="1" Style="{StaticResource FieldTextBox}" Text="{Binding PeerHost, UpdateSourceTrigger=PropertyChanged}"/>
               </Grid>
-              <TextBlock Text="填对方的本机名称或本机地址都行，点上面的设备会自动填好。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
               <Grid Margin="0,0,0,10"><Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                 <TextBlock Text="配对码" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
                 <TextBox Grid.Column="1" Style="{StaticResource FieldTextBox}" MaxLength="6" HorizontalAlignment="Left" Width="110" Text="{Binding PeerCode, UpdateSourceTrigger=PropertyChanged}"/>
@@ -105,14 +102,13 @@
               <Border Grid.Column="1" Background="{StaticResource SurfaceSecondaryBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="{StaticResource Radius6}" Padding="8,6" MinHeight="32" VerticalAlignment="Center"><TextBlock Text="{Binding ReceiveDirectory, Mode=OneWay}" TextTrimming="CharacterEllipsis" ToolTip="{Binding ReceiveDirectory}" Style="{StaticResource BodyText}" VerticalAlignment="Center"/></Border>
               <Button Grid.Column="2" Content="选择文件夹" Click="ChooseReceiveDirectory_Click" Style="{StaticResource CompactButton}" Margin="8,0,0,0"/>
             </Grid>
-            <TextBlock Text="在别的电脑上复制文件，收到的文件就落在这个文件夹里。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
           </StackPanel>
         </Border>
       </StackPanel>
       <StackPanel>
         <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="KeyboardMouse"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
         <TextBlock Text="键鼠共享" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
-        <TextBlock Text="两台电脑选同一张卡片：一台选“本机控制”，另一台选“本机接收”，然后在控制端点接管。接管中随时按 Ctrl + Alt + Q 交回。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+        <TextBlock Text="两台选同一张卡片：一台“本机控制”，一台“本机接收”，然后在控制端点接管。接管中按 Ctrl + Alt + Q 交回。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
         <Border Style="{StaticResource SectionCard}">
           <StackPanel>
             <TextBlock Text="当前状态" Style="{StaticResource CardHeader}"/>
@@ -141,7 +137,7 @@
             </StackPanel>
           </Border>
         </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
-        <TextBlock Text="Windows 的限制：UAC 提权弹窗和以管理员身份运行的窗口，普通程序注入不进去，这时键鼠会暂时不动。" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+        <TextBlock Text="UAC 弹窗和管理员权限窗口注入不进去，这时键鼠会暂时不动。" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
       </StackPanel>
     </Grid>
   </Grid>
