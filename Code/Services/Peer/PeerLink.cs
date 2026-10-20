@@ -321,7 +321,11 @@ public sealed class PeerLink : IAsyncDisposable
                         await WriteFrameAsync(session.Stream, FrameType.Pong, EmptyBody, session.CancellationToken);
                         break;
                     case FrameType.Text:
-                        if (Read<TextPayload>(frame.Value.Payload)?.Text is { } text) TextReceived?.Invoke(text);
+                        if (Read<TextPayload>(frame.Value.Payload)?.Text is { } text)
+                        {
+                            _ = AppLogger.InfoAsync($"Text frame received: {text.Length} chars");
+                            TextReceived?.Invoke(text);
+                        }
                         break;
                     case FrameType.Rejected:
                         LastError = Read<RejectPayload>(frame.Value.Payload)?.Reason ?? "对端关闭了连接。";
