@@ -15,7 +15,8 @@ public enum FrameType : byte
     Text = 10,
     FileHeader = 11,
     FileChunk = 12,
-    FileDone = 13
+    FileDone = 13,
+    FileEnd = 14
 }
 
 public readonly record struct Frame(FrameType Type, byte[] Payload);

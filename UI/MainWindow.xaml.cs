@@ -14,12 +14,13 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private HotkeyService? _hotkeys;
     private ClipboardService? _clipboard;
+    private bool _fileAutoAccept;
     private Point _monitorDragStart;
     private MonitorViewModel? _draggedMonitor;
     private readonly List<string> _monitorOrder = [];
     private int _statusVersion;
     public string DisplayStatusText { get => (string)GetValue(DisplayStatusTextProperty); private set => SetValue(DisplayStatusTextProperty, value); }
-    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
+    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); _fileAutoAccept = await _viewModel.IsFileAutoAcceptEnabledAsync(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         var source = (HwndSource)PresentationSource.FromVisual(this)!;
@@ -28,10 +29,21 @@ public partial class MainWindow : Window
         _hotkeys.Register(HotkeyService.ModifierKeys.Control | HotkeyService.ModifierKeys.Alt, 0x32, () => _viewModel.LaptopSwitchCommand.Execute(null), out _);
         _clipboard = new ClipboardService(source);
         _clipboard.LocalTextChanged += text => _ = _viewModel.SendClipboardTextAsync(text);
+        _clipboard.LocalFilesChanged += paths => _ = _viewModel.SendClipboardFilesAsync(paths);
         _clipboard.TextRejected += message => _viewModel.ReportStatus(message);
-        // 对端的文本是从后台线程送上来的，Progress 会把它送回 UI 线程再写剪贴板。
+        // 对端的内容是从后台线程送上来的，Progress 会把它送回 UI 线程再写剪贴板。
         _viewModel.RemoteClipboardTextHandler = new Progress<string>(text => _clipboard.ApplyRemoteText(text));
+        _viewModel.RemoteClipboardFilesHandler = new Progress<IReadOnlyList<string>>(paths => _clipboard.ApplyRemoteFiles(paths));
+        _viewModel.PeerOfferHandler = offer => Dispatcher.InvokeAsync(() => AskFileOffer(offer)).Task;
         _viewModel.PeerConnected += () => _clipboard.CaptureBaseline();
+    }
+    private bool AskFileOffer(FileOffer offer)
+    {
+        if (_fileAutoAccept) return true;
+        var editor = new FileOfferViewModel(offer, AppPaths.ReceivedFilesDirectory, autoAcceptEnabled: true);
+        if (new FileReceiveWindow { Owner = this, DataContext = editor }.ShowDialog() != true) return false;
+        if (editor.AutoAcceptChosen) { _fileAutoAccept = true; _ = _viewModel.SetFileAutoAcceptAsync(); }
+        return true;
     }
     private async void ShowPairingCode_Click(object sender, RoutedEventArgs e)
     {

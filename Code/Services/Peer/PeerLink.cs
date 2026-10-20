@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.Security;
@@ -23,6 +24,13 @@ public sealed class PeerLink : IAsyncDisposable
     private const int PairingCodeLifetimeMinutes = 5;
     private const int MaxPairingAttempts = 3;
     private const int ConnectTimeoutMs = 5000;
+    private const int MaxChunkBytes = 256 * 1024;
+    private const long MaxTotalFileBytes = 512L * 1024 * 1024;
+    private const int MaxFileCount = 200;
+    private const int OfferTimeoutSeconds = 90;
+
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _awaitingDecision = new();
+    private FileReceiveContext? _incoming;
 
     private readonly PeerSettingsService _settingsService;
     private readonly PeerIdentity _identity;
@@ -50,6 +58,10 @@ public sealed class PeerLink : IAsyncDisposable
     public bool IsConnected => _session is not null;
     public event Action? StateChanged;
     public event Action<string>? TextReceived;
+    /// 对端要发文件时由界面决定收不收（后台线程调用，实现自己负责切回 UI 线程）。
+    public Func<FileOffer, Task<bool>>? OfferHandler { get; set; }
+    public event Action<IReadOnlyList<string>>? FilesReceived;
+    public string ReceiveDirectory => AppPaths.ReceivedFilesDirectory;
 
     public async Task StartAsync()
     {
@@ -314,6 +326,23 @@ public sealed class PeerLink : IAsyncDisposable
                     case FrameType.Rejected:
                         LastError = Read<RejectPayload>(frame.Value.Payload)?.Reason ?? "对端关闭了连接。";
                         return;
+                    case FrameType.FileHeader:
+                        if (Read<FileOfferPayload>(frame.Value.Payload) is { } offer) _ = HandleFileOfferAsync(session, offer);
+                        break;
+                    case FrameType.FileChunk:
+                        _incoming?.Write(frame.Value.Payload);
+                        break;
+                    case FrameType.FileEnd:
+                        if (_incoming is not { } incoming) break;
+                        var paths = incoming.Complete();
+                        incoming.Dispose();
+                        _incoming = null;
+                        FilesReceived?.Invoke(paths);
+                        break;
+                    case FrameType.FileDone:
+                        if (Read<FileDecisionPayload>(frame.Value.Payload) is { } verdict && _awaitingDecision.TryRemove(verdict.TransferId, out var pending))
+                            pending.TrySetResult(verdict.Accepted);
+                        break;
                 }
             }
         }
@@ -340,6 +369,8 @@ public sealed class PeerLink : IAsyncDisposable
     private void RetireIfCurrent(PeerSession session)
     {
         session.Close();
+        _incoming?.Dispose();
+        _incoming = null;
         if (!ReferenceEquals(_session, session)) return;
         _session = null;
         RemoteName = null;
@@ -358,6 +389,66 @@ public sealed class PeerLink : IAsyncDisposable
             try { await WriteFrameAsync(target.Stream, type, body, target.CancellationToken); return true; }
             catch { return false; }
         }
+    }
+
+    public async Task<bool> SendFilesAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null) return false;
+        var files = paths.Where(File.Exists).ToList();
+        if (files.Count == 0) return false;
+        if (files.Count > MaxFileCount) { LastError = $"一次最多发送 {MaxFileCount} 个文件。"; return false; }
+        var sizes = files.Select(path => new FileInfo(path).Length).ToList();
+        var total = sizes.Sum();
+        if (total <= 0) return false;
+        if (total > MaxTotalFileBytes) { LastError = $"文件总量 {total / 1024 / 1024} MB 超过 512 MB 上限，没有发送。"; return false; }
+
+        var transferId = Guid.NewGuid().ToString("N");
+        var decision = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _awaitingDecision[transferId] = decision;
+        try
+        {
+            var offer = new FileOfferPayload(transferId, files.Select((path, index) => new FileOfferItemPayload(Path.GetFileName(path), sizes[index])).ToList());
+            await WriteFrameAsync(session.Stream, FrameType.FileHeader, Body(offer), session.CancellationToken);
+            // 先等对端点头再传字节：没同意就不该往对方硬盘里写任何东西。
+            var finished = await Task.WhenAny(decision.Task, Task.Delay(TimeSpan.FromSeconds(OfferTimeoutSeconds), cancellationToken));
+            await AppLogger.InfoAsync($"File offer decision wait finished: gotDecision={finished == decision.Task} accepted={(finished == decision.Task ? decision.Task.Result : false)}");
+            if (finished != decision.Task) { LastError = $"等对端确认超过 {OfferTimeoutSeconds} 秒，没有发送。"; return false; }
+            if (!decision.Task.Result) { LastError = "对端拒绝了这些文件。"; return false; }
+            foreach (var path in files)
+            {
+                await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                var buffer = new byte[MaxChunkBytes];
+                int read;
+                while ((read = await source.ReadAsync(buffer, session.CancellationToken)) > 0)
+                    await WriteFrameAsync(session.Stream, FrameType.FileChunk, read == buffer.Length ? buffer : buffer[..read], session.CancellationToken);
+            }
+            await WriteFrameAsync(session.Stream, FrameType.FileEnd, Body(new FileEndPayload(transferId)), session.CancellationToken);
+            await AppLogger.InfoAsync($"Sent {files.Count} files, {total / 1024} KB");
+            return true;
+        }
+        catch (Exception ex) { LastError = ex.Message; return false; }
+        finally { _awaitingDecision.TryRemove(transferId, out _); }
+    }
+
+    private async Task HandleFileOfferAsync(PeerSession session, FileOfferPayload offer)
+    {
+        var files = offer.Files.Select(item => new FileOfferFile(FileNameSafety.Sanitize(item.Name), item.Size)).ToList();
+        var accepted = false;
+        try
+        {
+            var total = files.Sum(file => file.Size);
+            if (files.Count > 0 && files.Count <= MaxFileCount && total > 0 && total <= MaxTotalFileBytes && OfferHandler is { } handler)
+            {
+                await AppLogger.InfoAsync($"File offer asking UI: {files.Count} files, {total / 1024} KB");
+                accepted = await handler(new FileOffer(files));
+                await AppLogger.InfoAsync($"File offer answered: accepted={accepted}");
+            }
+        }
+        catch (Exception ex) { await AppLogger.ErrorAsync("处理文件接收请求失败", ex); }
+        if (accepted) _incoming = new FileReceiveContext(new FileOffer(files), ReceiveDirectory);
+        await WriteFrameAsync(session.Stream, FrameType.FileDone, Body(new FileDecisionPayload(offer.TransferId, accepted)), session.CancellationToken);
+        await AppLogger.InfoAsync($"File offer decision sent to peer: accepted={accepted}");
     }
 
     public async Task DisconnectAsync()
