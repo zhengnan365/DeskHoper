@@ -63,6 +63,16 @@ public sealed class PeerLink : IAsyncDisposable
     /// 对端要发文件时由界面决定收不收（后台线程调用，实现自己负责切回 UI 线程）。
     public Func<FileOffer, Task<bool>>? OfferHandler { get; set; }
     public event Action<IReadOnlyList<string>>? FilesReceived;
+    public event Action<KeyboardInput>? KeyboardReceived;
+    public event Action<MouseInput>? MouseReceived;
+    /// 对端请求接管输入，带它选的那张卡片名字。本机决定放不放行。
+    public event Action<string>? InputArmRequested;
+    public event Action<string>? InputAcked;
+    public event Action<string>? InputRejected;
+    public event Action? InputStopped;
+    /// 只有本机确实被选成被控端才置位，配对成功本身不等于能把输入注到这台机器上。
+    public bool AcceptingInput { get; private set; }
+    public void SetAcceptingInput(bool accepting) => AcceptingInput = accepting;
     private string _receiveDirectory = AppPaths.ReceivedFilesDirectory;
     public string ReceiveDirectory => _receiveDirectory;
     public static string ResolveReceiveDirectory(string? directory) => string.IsNullOrWhiteSpace(directory) ? AppPaths.ReceivedFilesDirectory : directory.Trim();
@@ -354,6 +364,27 @@ public sealed class PeerLink : IAsyncDisposable
                         if (Read<FileDecisionPayload>(frame.Value.Payload) is { } verdict && _awaitingDecision.TryRemove(verdict.TransferId, out var pending))
                             pending.TrySetResult(verdict.Accepted);
                         break;
+                    case FrameType.InputArm:
+                        if (Read<InputHandshakePayload>(frame.Value.Payload) is { Mode: not null } arm) InputArmRequested?.Invoke(arm.Mode);
+                        break;
+                    case FrameType.InputAck:
+                        if (Read<InputHandshakePayload>(frame.Value.Payload) is { Mode: not null } acked) InputAcked?.Invoke(acked.Mode);
+                        break;
+                    case FrameType.InputReject:
+                        if (Read<InputHandshakePayload>(frame.Value.Payload) is { } rejected) InputRejected?.Invoke(rejected.Reason ?? "对端没有放行输入接管。");
+                        break;
+                    case FrameType.InputStop:
+                        AcceptingInput = false;
+                        InputStopped?.Invoke();
+                        break;
+                    case FrameType.Keyboard when AcceptingInput:
+                        try { KeyboardReceived?.Invoke(InputPayload.ReadKeyboard(frame.Value.Payload)); }
+                        catch (InvalidDataException) { }
+                        break;
+                    case FrameType.Mouse when AcceptingInput:
+                        try { MouseReceived?.Invoke(InputPayload.ReadMouse(frame.Value.Payload)); }
+                        catch (InvalidDataException) { }
+                        break;
                 }
             }
         }
@@ -382,11 +413,37 @@ public sealed class PeerLink : IAsyncDisposable
         session.Close();
         _incoming?.Dispose();
         _incoming = null;
+        // 链路一断必须马上停止接收注入，否则控制端那边看起来还在"接管"，本机却已经没人管了。
+        if (AcceptingInput) { AcceptingInput = false; InputStopped?.Invoke(); }
         if (!ReferenceEquals(_session, session)) return;
         _session = null;
         RemoteName = null;
         RemoteFingerprint = null;
         SetState(PeerLinkState.Unpaired);
+    }
+
+    public Task<bool> SendKeyboardAsync(KeyboardInput input) => SendInputFrameAsync(FrameType.Keyboard, InputPayload.Write(input));
+    public Task<bool> SendMouseAsync(MouseInput input) => SendInputFrameAsync(FrameType.Mouse, InputPayload.Write(input));
+    public Task<bool> SendInputArmAsync(string mode) => SendHandshakeAsync(FrameType.InputArm, mode, null);
+    public Task<bool> SendInputAckAsync(string mode) => SendHandshakeAsync(FrameType.InputAck, mode, null);
+    public Task<bool> SendInputRejectAsync(string reason) => SendHandshakeAsync(FrameType.InputReject, null, reason);
+    public Task<bool> SendInputStopAsync() => SendAsync(FrameType.InputStop, EmptyBody);
+
+    private Task<bool> SendInputFrameAsync(FrameType type, byte[] body) => SendAsync(type, body);
+
+    private Task<bool> SendHandshakeAsync(FrameType type, string? mode, string? reason) => SendAsync(type, Body(new InputHandshakePayload(mode, reason)));
+
+    private Task<bool> SendAsync(FrameType type, byte[] body)
+    {
+        var session = _session;
+        if (session is null) return Task.FromResult(false);
+        return SendAsync(session);
+
+        async Task<bool> SendAsync(PeerSession target)
+        {
+            try { await WriteFrameAsync(target.Stream, type, body, target.CancellationToken); return true; }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException) { return false; }
+        }
     }
 
     public Task<bool> SendTextAsync(string text)
@@ -508,6 +565,7 @@ public sealed class PeerLink : IAsyncDisposable
     private sealed record ProofPayload(string Signature, string? Code);
     private sealed record RejectPayload(string Reason);
     private sealed record TextPayload(string Text);
+    private sealed record InputHandshakePayload(string? Mode, string? Reason);
 
     private sealed class PeerSession
     {

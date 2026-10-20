@@ -50,6 +50,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         BeginRenameLocalNameCommand = new AsyncRelayCommand(BeginRenameLocalName);
         CommitRenameLocalNameCommand = new AsyncRelayCommand(CommitRenameLocalName);
         CancelRenameLocalNameCommand = new AsyncRelayCommand(CancelRenameLocalName);
+        WireInputCommands();
     }
     public ObservableCollection<MonitorViewModel> Monitors { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
@@ -98,6 +99,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _peerLink.TextReceived += text => RemoteClipboardTextHandler?.Invoke(text);
         _peerLink.FilesReceived += paths => RemoteClipboardFilesHandler?.Invoke(paths);
         _peerLink.OfferHandler = offer => PeerOfferHandler is { } handler ? handler(offer) : Task.FromResult(false);
+        _peerLink.InputArmRequested += mode => _ = HandleInputArmAsync(mode);
+        _peerLink.InputAcked += mode => StartForwarding(mode);
+        _peerLink.InputRejected += reason => { StopForwarding(); InputErrorText = reason; };
+        _peerLink.InputStopped += () => { StopForwarding(); IsReceivingInput = false; };
+        _peerLink.KeyboardReceived += key => InputReceiver.Apply(key);
+        _peerLink.MouseReceived += mouse => InputReceiver.Apply(mouse);
         return _peerLink;
     }
 
@@ -115,6 +122,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(PeerStatusText));
         OnPropertyChanged(nameof(LocalPairingCode));
         OnPropertyChanged(nameof(IsPairingCodeShown));
+        // 链路一断必须立刻交回：钩子还挂着而发不出去的话，用户面对的就是一台敲不动的电脑。
+        if (_peerLink?.IsConnected != true) { StopForwarding(); IsReceivingInput = false; }
         if (_peerLink?.IsConnected == true) PeerConnected?.Invoke();
     }
 
@@ -235,6 +244,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         ReceiveDirectory = PeerLink.ResolveReceiveDirectory(settings.ReceiveDirectory);
         OnPropertyChanged(nameof(IsReceiveDirectoryCustom));
         if (string.IsNullOrEmpty(_peerHost)) PeerHost = settings.LastPeerHost ?? string.Empty;
+        LoadInputModes(settings);
     }
 
     public async Task StartPeerIfNeededAsync()
@@ -272,6 +282,149 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             _discovery = null;
             await AppLogger.ErrorAsync("LAN discovery could not bind its UDP port", ex);
         }
+    }
+
+    private readonly ObservableCollection<InputModeViewModel> _inputModes = [];
+    private InputForwarder? _forwarder;
+    private InputModeViewModel? _activeInputMode;
+    private bool _isForwarding;
+    private bool _isReceivingInput;
+    private string _inputStatusText = "各用各的键鼠。";
+    private string? _inputErrorText;
+
+    public IReadOnlyList<InputModeViewModel> InputModes => _inputModes;
+    public bool IsForwarding { get => _isForwarding; private set { if (SetProperty(ref _isForwarding, value)) RefreshInputStatus(); } }
+    public bool IsReceivingInput { get => _isReceivingInput; private set { if (SetProperty(ref _isReceivingInput, value)) RefreshInputStatus(); } }
+    public string InputStatusText { get => _inputStatusText; private set => SetProperty(ref _inputStatusText, value); }
+    public string? InputErrorText { get => _inputErrorText; private set { if (SetProperty(ref _inputErrorText, value)) OnPropertyChanged(nameof(ShowInputError)); } }
+    public bool ShowInputError => !string.IsNullOrEmpty(_inputErrorText);
+    public AsyncRelayCommand SelectInputModeCommand { get; private set; } = null!;
+    public AsyncRelayCommand TakeOverInputCommand { get; private set; } = null!;
+    public AsyncRelayCommand ReleaseInputCommand { get; private set; } = null!;
+
+    private void RefreshInputStatus()
+    {
+        InputStatusText = (_isForwarding, _isReceivingInput) switch
+        {
+            (true, _) => "已接管：这台的键盘鼠标正转给对端，按 Ctrl + Alt + Q 交回。",
+            (false, true) => "已交出：对端正在用它的键盘鼠标操作这台。",
+            (false, false) => _activeInputMode is null or { Index: 0 } ? "各用各的键鼠。" : $"{_activeInputMode.Name}：还没接管。"
+        };
+        OnPropertyChanged(nameof(IsForwarding));
+    }
+
+    private void WireInputCommands()
+    {
+        SelectInputModeCommand = new AsyncRelayCommand(parameter => parameter is InputModeViewModel mode ? SelectInputModeAsync(mode) : Task.CompletedTask);
+        TakeOverInputCommand = new AsyncRelayCommand(TakeOverInputAsync);
+        ReleaseInputCommand = new AsyncRelayCommand(ReleaseInputAsync);
+    }
+
+    private async Task SelectInputModeAsync(InputModeViewModel mode)
+    {
+        if (_activeInputMode == mode) return;
+        // 换卡片必须先交回，否则上一张卡片的钩子还挂在机器上。
+        await ReleaseInputAsync();
+        foreach (var candidate in _inputModes) candidate.IsSelected = candidate == mode;
+        _activeInputMode = mode;
+        RefreshInputStatus();
+        await SaveInputModesAsync();
+    }
+
+    private async Task TakeOverInputAsync()
+    {
+        InputErrorText = null;
+        var link = _peerLink;
+        if (link is null || !link.IsConnected) { InputErrorText = "还没连上对端，先去文件共享页连接。"; return; }
+        var mode = _activeInputMode;
+        if (mode is null || mode.Role != InputRole.Controller) { InputErrorText = "这张卡片要把本机选成控制端才能接管。"; return; }
+        if (!await link.SendInputArmAsync(mode.Name)) { InputErrorText = "请求发不出去，链路可能已经断了。"; return; }
+        InputStatusText = $"已请求接管「{mode.Name}」，等对端确认…";
+    }
+
+    private async Task HandleInputArmAsync(string requested)
+    {
+        var link = _peerLink;
+        if (link is null) return;
+        var mode = _activeInputMode;
+        if (mode is null || !string.Equals(mode.Name, requested, StringComparison.Ordinal))
+        {
+            var reason = mode is null ? "本机还没选键鼠卡片。" : $"本机选的是「{mode.Name}」，和对端选的「{requested}」不是同一张。";
+            InputErrorText = reason;
+            await link.SendInputRejectAsync(reason);
+            return;
+        }
+        if (mode.Role != InputRole.Target)
+        {
+            InputErrorText = "这张卡片把本机选成了控制端，不能再接收对端的输入。";
+            await link.SendInputRejectAsync(InputErrorText);
+            return;
+        }
+        link.SetAcceptingInput(true);
+        IsReceivingInput = true;
+        await link.SendInputAckAsync(mode.Name);
+        await AppLogger.InfoAsync($"Accepting injected input for mode {mode.Name}");
+    }
+
+    private void StartForwarding(string mode)
+    {
+        if (_forwarder is not null) return;
+        var link = _peerLink;
+        if (link is null) return;
+        _forwarder = new InputForwarder(
+            key => _ = link.SendKeyboardAsync(key),
+            mouse => _ = link.SendMouseAsync(mouse),
+            () => _ = ReleaseInputAsync());
+        _forwarder.Start();
+        IsForwarding = true;
+        _ = AppLogger.InfoAsync($"Input forwarding armed for mode {mode}");
+    }
+
+    private void StopForwarding()
+    {
+        var forwarder = _forwarder;
+        if (forwarder is null) return;
+        _forwarder = null;
+        forwarder.Dispose();
+        IsForwarding = false;
+    }
+
+    private async Task ReleaseInputAsync()
+    {
+        StopForwarding();
+        var link = _peerLink;
+        if (link is { AcceptingInput: true })
+        {
+            link.SetAcceptingInput(false);
+            IsReceivingInput = false;
+            await link.SendInputStopAsync();
+        }
+        IsReceivingInput = false;
+        RefreshInputStatus();
+    }
+
+    private async Task SaveInputModesAsync()
+    {
+        var settings = await _peerSettingsService.LoadAsync();
+        var modes = _inputModes.Select(mode => new KeyboardMouseMode(mode.Name, mode.Role)).ToList();
+        var active = _activeInputMode?.Index ?? 0;
+        if (settings.KeyboardMouseActive == active && settings.KeyboardMouseModes.Zip(modes).All(pair => pair.First == pair.Second)) return;
+        await _peerSettingsService.SaveSettingsAsync(settings with { KeyboardMouseModes = modes, KeyboardMouseActive = active });
+    }
+
+    private void LoadInputModes(PeerSettings settings)
+    {
+        _inputModes.Clear();
+        var modes = settings.KeyboardMouseModes.Count == 3 ? settings.KeyboardMouseModes : [new KeyboardMouseMode("各用各的键鼠", InputRole.None), new KeyboardMouseMode("共用笔记本的键鼠", InputRole.None), new KeyboardMouseMode("共用台式机的键鼠", InputRole.None)];
+        for (var index = 0; index < modes.Count; index++)
+        {
+            var mode = new InputModeViewModel(modes[index].Name, index == 0 ? InputRole.None : modes[index].Role, index, changed => { _ = SaveInputModesAsync(); });
+            _inputModes.Add(mode);
+        }
+        var active = Math.Clamp(settings.KeyboardMouseActive, 0, _inputModes.Count - 1);
+        _activeInputMode = _inputModes[active];
+        _activeInputMode.IsSelected = true;
+        RefreshInputStatus();
     }
 
     private async Task GeneratePairingCodeAsync()    {
@@ -458,6 +611,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _lifetimeCancellation.Cancel();
         if (_identificationPresenter is IDisposable presenter) presenter.Dispose();
+        StopForwarding();
         if (_discovery is not null) { var discovery = _discovery; _discovery = null; await discovery.DisposeAsync(); }
         if (_peerLink is not null) { var link = _peerLink; _peerLink = null; await link.DisposeAsync(); }
         await _ddcCiService.ShutdownAsync(timeout);

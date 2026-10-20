@@ -112,7 +112,36 @@
       <StackPanel>
         <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="KeyboardMouse"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
         <TextBlock Text="键鼠共享" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
-        <TextBlock Text="这个功能还在开发中，当前版本只能共享剪贴板和文件。" Style="{StaticResource SecondaryText}" TextWrapping="Wrap"/>
+        <TextBlock Text="两台电脑选同一张卡片：一台选“本机控制”，另一台选“本机接收”，然后在控制端点接管。接管中随时按 Ctrl + Alt + Q 交回。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+        <Border Style="{StaticResource SectionCard}">
+          <StackPanel>
+            <TextBlock Text="当前状态" Style="{StaticResource CardHeader}"/>
+            <TextBlock Text="{Binding InputStatusText}" Style="{StaticResource BodyText}" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding InputErrorText}"><TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource ErrorText}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Margin" Value="0,6,0,0"/><Style.Triggers><DataTrigger Binding="{Binding ShowInputError}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+          </StackPanel>
+        </Border>
+        <ItemsControl ItemsSource="{Binding InputModes}"><ItemsControl.ItemTemplate><DataTemplate>
+          <Border Padding="14,12" Margin="0,0,0,12" CornerRadius="{StaticResource Radius8}" Background="{StaticResource SurfaceBrush}">
+            <Border.Style><Style TargetType="Border"><Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/><Setter Property="BorderThickness" Value="1"/><Style.Triggers><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/><Setter Property="BorderThickness" Value="1.5"/></DataTrigger></Style.Triggers></Style></Border.Style>
+            <StackPanel>
+              <Grid Margin="0,0,0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Grid Grid.Column="0">
+                  <TextBlock Text="{Binding Name}" HorizontalAlignment="Left" MouseLeftButtonDown="InputModeName_MouseLeftButtonDown"><TextBlock.ContextMenu><ContextMenu><MenuItem Header="重命名这张卡片" Click="InputModeRename_Click"/></ContextMenu></TextBlock.ContextMenu><TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource FieldLabel}"><Setter Property="HorizontalAlignment" Value="Left"/><Style.Triggers><DataTrigger Binding="{Binding IsEditingName}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+                  <TextBox Text="{Binding EditableName, UpdateSourceTrigger=PropertyChanged}" KeyDown="InputModeNameEditor_KeyDown" LostFocus="InputModeNameEditor_LostFocus"><TextBox.Style><Style TargetType="TextBox" BasedOn="{StaticResource FieldTextBox}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="MinHeight" Value="28"/><Setter Property="Padding" Value="6,2"/><Style.Triggers><DataTrigger Binding="{Binding IsEditingName}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBox.Style></TextBox>
+                </Grid>
+                <Button Grid.Column="1" Content="选这张" Command="{Binding DataContext.SelectInputModeCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Padding" Value="8,4"/><Style.Triggers><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
+              </Grid>
+              <TextBlock Text="{Binding RoleText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+              <StackPanel Orientation="Horizontal"><StackPanel.Style><Style TargetType="StackPanel"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding IsOffMode}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
+                <Button Content="本机控制" Command="{Binding ChooseControllerCommand}"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Padding" Value="8,4"/><Style.Triggers><DataTrigger Binding="{Binding IsController}" Value="True"><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
+                <Button Content="本机接收" Command="{Binding ChooseTargetCommand}" Margin="8,0,0,0"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Padding" Value="8,4"/><Style.Triggers><DataTrigger Binding="{Binding IsTarget}" Value="True"><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
+              </StackPanel>
+              <Button Content="接管键鼠" HorizontalAlignment="Left" Margin="0,8,0,0" Width="96" Command="{Binding DataContext.TakeOverInputCommand, RelativeSource={RelativeSource AncestorType=Window}}"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource AccentButton}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,8,0,0"/><Setter Property="Width" Value="96"/><Style.Triggers><MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding IsSelected}" Value="True"/><Condition Binding="{Binding IsController}" Value="True"/></MultiDataTrigger.Conditions><Setter Property="Visibility" Value="Visible"/></MultiDataTrigger></Style.Triggers></Style></Button.Style></Button>
+              <Button Content="交回键鼠" HorizontalAlignment="Left" Margin="0,8,0,0" Width="96" Command="{Binding DataContext.ReleaseInputCommand, RelativeSource={RelativeSource AncestorType=Window}}"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,8,0,0"/><Setter Property="Width" Value="96"/><Style.Triggers><MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding IsSelected}" Value="True"/><Condition Binding="{Binding DataContext.IsForwarding, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/></MultiDataTrigger.Conditions><Setter Property="Visibility" Value="Visible"/></MultiDataTrigger></Style.Triggers></Style></Button.Style></Button>
+            </StackPanel>
+          </Border>
+        </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+        <TextBlock Text="Windows 的限制：UAC 提权弹窗和以管理员身份运行的窗口，普通程序注入不进去，这时键鼠会暂时不动。" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
       </StackPanel>
     </Grid>
   </Grid>

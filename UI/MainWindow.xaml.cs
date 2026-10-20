@@ -109,6 +109,23 @@ public partial class MainWindow : Window
         else if (e.Key == Key.Escape) { _viewModel.CancelRenameLocalNameCommand.Execute(null); e.Handled = true; }
     }
     private void LocalNameEditor_LostFocus(object sender, RoutedEventArgs e) { if (Mouse.LeftButton != MouseButtonState.Pressed) _viewModel.CommitRenameLocalNameCommand.Execute(null); }
+    private void InputModeName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2 && sender is FrameworkElement element && element.DataContext is InputModeViewModel mode) { mode.BeginRenameCommand.Execute(null); e.Handled = true; }
+    }
+    private void InputModeRename_Click(object sender, RoutedEventArgs e)
+    {
+        // 和切换按钮卡片一样：菜单项的 DataContext 继承不可靠，一律从 PlacementTarget 拿。
+        if ((sender as MenuItem)?.Parent is ContextMenu menu && menu.PlacementTarget is FrameworkElement target && target.DataContext is InputModeViewModel mode)
+            mode.BeginRenameCommand.Execute(null);
+    }
+    private void InputModeNameEditor_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (sender is not TextBox editor || editor.DataContext is not InputModeViewModel mode) return;
+        if (e.Key == Key.Enter) { mode.CommitRenameCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.Escape) { mode.CancelRenameCommand.Execute(null); e.Handled = true; }
+    }
+    private void InputModeNameEditor_LostFocus(object sender, RoutedEventArgs e) { if (sender is TextBox editor && editor.DataContext is InputModeViewModel mode && Mouse.LeftButton != MouseButtonState.Pressed) mode.CommitRenameCommand.Execute(null); }
     private void MonitorName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ClickCount == 2 && sender is FrameworkElement element)

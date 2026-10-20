@@ -208,6 +208,34 @@ Assert(await xferA.SendFilesAsync([xferTextPath, xferBigPath]), "同意后两个
 var xferLanded = await landedFiles.Task.WaitAsync(TimeSpan.FromSeconds(15));
 Assert(xferLanded.Count == 2 && File.ReadAllText(xferLanded[0]) == "中文内容 hello", "小文件内容必须逐字一致");
 Assert(new FileInfo(xferLanded[1]).Length == xferPayload.Length && File.ReadAllBytes(xferLanded[1]).AsSpan().SequenceEqual(xferPayload), "跨多个数据块的大文件必须逐字节一致");
+// ---------- 键鼠转发：帧格式，以及"没放行就绝不能进注入路径" ----------
+var keyboardDown = InputPayload.ReadKeyboard(InputPayload.Write(new KeyboardInput(true, true, 0x7B, 0x1D)));
+Assert(keyboardDown is { IsDown: true, IsExtended: true, VirtualKey: 0x7B, ScanCode: 0x1D }, "键盘帧必须原样往返，扩展键标志不能丢");
+Assert(!InputPayload.ReadKeyboard(InputPayload.Write(new KeyboardInput(false, false, 0x41, 0x1E))).IsDown, "抬起必须能和按下区分，丢了 up 对端就是一个按住的键");
+var mouseMove = InputPayload.ReadMouse(InputPayload.Write(new MouseInput(-1234, 5678, 0x0001, -3)));
+Assert(mouseMove.DeltaX == -1234 && mouseMove.DeltaY == 5678 && mouseMove.WheelDelta == -3 && mouseMove.EventFlags == 0x0001, "鼠标的负位移和滚轮方向必须原样往返");
+try { InputPayload.ReadMouse(new byte[4]); Assert(false, "长度不对的鼠标帧必须报错，不能读到半个事件"); }
+catch (InvalidDataException) { }
+var injected = new TaskCompletionSource<KeyboardInput>();
+xferB.KeyboardReceived += key => injected.TrySetResult(key);
+Assert(await xferA.SendKeyboardAsync(new KeyboardInput(true, false, 0x41, 0x1E)), "键盘帧写入应该成功");
+Assert(!injected.Task.Wait(TimeSpan.FromMilliseconds(400)), "对端没放行时，键盘帧绝不能走到注入这一步");
+xferB.SetAcceptingInput(true);
+Assert(await xferA.SendKeyboardAsync(new KeyboardInput(true, false, 0x42, 0x2E)), "放行后键盘帧写入应该成功");
+Assert((await injected.Task.WaitAsync(TimeSpan.FromSeconds(3))).VirtualKey == 0x42, "放行之后键盘帧必须送到注入回调");
+var armSeen = new TaskCompletionSource<string>();
+xferB.InputArmRequested += mode => armSeen.TrySetResult(mode);
+await xferA.SendInputArmAsync("共用笔记本的键鼠");
+Assert(await armSeen.Task.WaitAsync(TimeSpan.FromSeconds(3)) == "共用笔记本的键鼠", "接管请求必须带上卡片名字，两台机器靠它对上");
+var rejectSeen = new TaskCompletionSource<string>();
+xferA.InputRejected += reason => rejectSeen.TrySetResult(reason);
+await xferB.SendInputRejectAsync("两张卡片不是同一张。");
+Assert(await rejectSeen.Task.WaitAsync(TimeSpan.FromSeconds(3)) == "两张卡片不是同一张。", "被拒绝时原因必须原样送回控制端，否则用户只知道按了没反应");
+var stopped = new TaskCompletionSource();
+xferB.InputStopped += () => stopped.TrySetResult();
+await xferA.SendInputStopAsync();
+await stopped.Task.WaitAsync(TimeSpan.FromSeconds(3));
+Assert(!xferB.AcceptingInput, "收到交回信号必须同时停止本机接收注入");
 await xferA.DisposeAsync();
 await xferB.DisposeAsync();
 PeerIdentity.Remove(xferSubjectA);
@@ -221,6 +249,7 @@ Console.WriteLine("V2 monitor preferences/input learning contract tests passed."
 Console.WriteLine("Switch button editor contract tests passed.");
 Console.WriteLine("Peer pairing and encrypted link contract tests passed.");
 Console.WriteLine("File transfer and receive-path safety contract tests passed.");
+Console.WriteLine("Keyboard and mouse forwarding gate contract tests passed.");
 
 void Assert(bool condition, string message) { if (!condition) failures.Add(message); }
 

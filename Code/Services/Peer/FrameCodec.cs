@@ -16,7 +16,13 @@ public enum FrameType : byte
     FileHeader = 11,
     FileChunk = 12,
     FileDone = 13,
-    FileEnd = 14
+    FileEnd = 14,
+    InputArm = 20,
+    InputAck = 21,
+    InputReject = 22,
+    InputStop = 23,
+    Keyboard = 24,
+    Mouse = 25
 }
 
 public readonly record struct Frame(FrameType Type, byte[] Payload);
