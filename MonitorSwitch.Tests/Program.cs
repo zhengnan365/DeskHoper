@@ -93,6 +93,12 @@ Assert(forced.Success && (await learningPrefs.GetAsync("AOC|LEARN"))!.InputMappi
 await learningPrefs.ResetMappingAsync("AOC|LEARN", "Q27V5G5R3");
 Assert((await learningPrefs.GetAsync("AOC|LEARN"))!.InputMappings.DisplayPort == 15, "AOC 重置映射必须恢复 DP=15");
 File.Delete(learningPath);
+var editorDevice = new MonitorDevice { Id = "AOC|A", StableId = "AOC|A", FriendlyName = "AOC", Model = "Q27", WindowsDisplayName = "\\\\.\\DISPLAY2", CurrentInput = 17, IsDdcSupported = true };
+var editorMonitor = new MonitorViewModel(editorDevice, new FixedDdcCiService(17), new MonitorInputMapping(), _ => { });
+var editorVm = new ProfileEditViewModel(new SwitchProfile { Id = "laptop", Name = "笔记本", ProjectionMode = ProjectionMode.Extend, Monitors = [new SwitchProfileMonitor { StableId = "AOC|A", InputKind = InputSourceKind.DisplayPort, Input = 15 }] }, [editorMonitor]);
+Assert(editorVm.Rows.Count == 1 && editorVm.SelectedProjection?.Mode == ProjectionMode.Extend && editorVm.Rows[0].SelectedOption?.Kind == InputSourceKind.DisplayPort, "编辑已有按钮必须预选它原来保存的输入源，而不是显示器当前输入");
+var rebuiltProfile = editorVm.Build();
+Assert(rebuiltProfile.Id == "laptop" && rebuiltProfile.Name == "笔记本" && rebuiltProfile.Monitors[0].Input == 15 && rebuiltProfile.ProjectionMode == ProjectionMode.Extend, "编辑器保存必须沿用原 Id 并写回选定的输入值与投影模式");
 Assert(ClipboardSyncPolicy.HasChanged("abc", "ab") && !ClipboardSyncPolicy.HasChanged("abc", "abc") && !ClipboardSyncPolicy.HasChanged(null, "abc") && !ClipboardSyncPolicy.HasChanged(string.Empty, "abc"), "剪贴板只在内容真的变化时才同步，空内容和相同内容都不发（这也是防回声的依据）");
 Assert(!ClipboardSyncPolicy.IsTooLong(new string('x', ClipboardSyncPolicy.MaxTextLength)) && ClipboardSyncPolicy.IsTooLong(new string('x', ClipboardSyncPolicy.MaxTextLength + 1)), "剪贴板大小上限的边界判断必须准确");
 // ---------- 共享链路：同机回环真配对 ----------
@@ -212,6 +218,7 @@ if (failures.Count > 0) throw new InvalidOperationException(string.Join(Environm
 Console.WriteLine("Projection mode contract tests passed.");
 Console.WriteLine("Per-monitor profile contract tests passed.");
 Console.WriteLine("V2 monitor preferences/input learning contract tests passed.");
+Console.WriteLine("Switch button editor contract tests passed.");
 Console.WriteLine("Peer pairing and encrypted link contract tests passed.");
 Console.WriteLine("File transfer and receive-path safety contract tests passed.");
 

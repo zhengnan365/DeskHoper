@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Sockets;
 using MonitorSwitch.Models;
 using MonitorSwitch.Services;
 
@@ -40,11 +41,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SetMonitorInputCommand = new AsyncRelayCommand(parameter => parameter is MonitorInputRequest request ? request.Monitor.SetInputValueAsync(request.Value) : Task.CompletedTask);
         SetProjectionModeCommand = new AsyncRelayCommand(parameter => parameter is ProjectionMode mode ? SetProjectionAsync(mode) : Task.CompletedTask);
         IdentifyMonitorsCommand = new AsyncRelayCommand(IdentifyMonitorsAsync);
-        SelectSectionCommand = new AsyncRelayCommand(parameter => { if (parameter is string name && Enum.TryParse<AppSection>(name, out var section)) { ActiveSection = section; if (section == AppSection.Sharing) EnsureLocalIpAddressDetected(); } return Task.CompletedTask; });
+        SelectSectionCommand = new AsyncRelayCommand(parameter => { if (parameter is string name && Enum.TryParse<AppSection>(name, out var section)) { ActiveSection = section; if (section == AppSection.Sharing) { EnsureLocalIpAddressDetected(); _ = StartDiscoveryIfNeededAsync(); } } return Task.CompletedTask; });
         GeneratePairingCodeCommand = new AsyncRelayCommand(GeneratePairingCodeAsync);
         CancelPairingCodeCommand = new AsyncRelayCommand(CancelPairingCodeAsync);
         ConnectPeerCommand = new AsyncRelayCommand(ConnectPeerAsync);
         DisconnectPeerCommand = new AsyncRelayCommand(DisconnectPeerAsync);
+        SelectPeerCommand = new AsyncRelayCommand(parameter => { if (parameter is LanPeer peer) PeerHost = peer.Address; return Task.CompletedTask; });
+        BeginRenameLocalNameCommand = new AsyncRelayCommand(BeginRenameLocalName);
+        CommitRenameLocalNameCommand = new AsyncRelayCommand(CommitRenameLocalName);
+        CancelRenameLocalNameCommand = new AsyncRelayCommand(CancelRenameLocalName);
     }
     public ObservableCollection<MonitorViewModel> Monitors { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
@@ -52,6 +57,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public AsyncRelayCommand CancelPairingCodeCommand { get; }
     public AsyncRelayCommand ConnectPeerCommand { get; }
     public AsyncRelayCommand DisconnectPeerCommand { get; }
+    public AsyncRelayCommand SelectPeerCommand { get; }
     public AsyncRelayCommand SetInternalProjectionCommand { get; }
     public AsyncRelayCommand SetDuplicateProjectionCommand { get; }
     public AsyncRelayCommand SetExtendProjectionCommand { get; }
@@ -128,6 +134,27 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public AsyncRelayCommand SelectSectionCommand { get; private set; } = null!;
     public bool AutoAcceptFiles { get => _autoAcceptFiles; set { if (SetProperty(ref _autoAcceptFiles, value)) _ = SaveAutoAcceptFilesAsync(value); } }
     public string PeerLocalName { get => _peerLocalName; private set => SetProperty(ref _peerLocalName, value); }
+    private bool _isEditingLocalName;
+    private string _editableLocalName = string.Empty;
+    public bool IsEditingLocalName { get => _isEditingLocalName; private set => SetProperty(ref _isEditingLocalName, value); }
+    public string EditableLocalName { get => _editableLocalName; set => SetProperty(ref _editableLocalName, value); }
+    public AsyncRelayCommand BeginRenameLocalNameCommand { get; private set; } = null!;
+    public AsyncRelayCommand CommitRenameLocalNameCommand { get; private set; } = null!;
+    public AsyncRelayCommand CancelRenameLocalNameCommand { get; private set; } = null!;
+    private Task BeginRenameLocalName() { EditableLocalName = PeerLocalName; IsEditingLocalName = true; return Task.CompletedTask; }
+    private Task CancelRenameLocalName() { EditableLocalName = PeerLocalName; IsEditingLocalName = false; return Task.CompletedTask; }
+    private async Task CommitRenameLocalName()
+    {
+        if (!IsEditingLocalName) return;
+        IsEditingLocalName = false;
+        var name = EditableLocalName.Trim();
+        if (name.Length == 0 || name == PeerLocalName) { EditableLocalName = PeerLocalName; return; }
+        var settings = await _peerSettingsService.LoadAsync();
+        await _peerSettingsService.SaveSettingsAsync(settings with { LocalName = name });
+        PeerLocalName = name;
+        ReportStatus($"本机名称已改成 {name}");
+        await AppLogger.InfoAsync($"Local peer name changed to {name}");
+    }
     /// 对端要往哪台机器上连，所以这一页得把本机 IP 显示出来。第一次进这一页时才查，不占启动时间。
     public string LocalIpAddressText { get => _localIpAddress; private set => SetProperty(ref _localIpAddress, value); }
     private void EnsureLocalIpAddressDetected()
@@ -202,6 +229,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         var settings = await _peerSettingsService.LoadAsync();
         PeerLocalName = settings.LocalName;
+        EditableLocalName = settings.LocalName;
         _autoAcceptFiles = settings.AutoAcceptFiles;
         OnPropertyChanged(nameof(AutoAcceptFiles));
         ReceiveDirectory = PeerLink.ResolveReceiveDirectory(settings.ReceiveDirectory);
@@ -217,8 +245,36 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(PeerStatusText));
     }
 
-    private async Task GeneratePairingCodeAsync()
+    private LanDiscovery? _discovery;
+    private IReadOnlyList<LanPeer> _discoveredPeers = [];
+    /// 发现的设备列表在后台线程到达，由界面负责切回 UI 线程——和剪贴板那两条回调同一个套路。
+    public Action<IReadOnlyList<LanPeer>>? PeersDiscoveredHandler { get; set; }
+    public IReadOnlyList<LanPeer> DiscoveredPeers { get => _discoveredPeers; private set => SetProperty(ref _discoveredPeers, value); }
+    public bool HasDiscoveredPeers => _discoveredPeers.Count > 0;
+    public void ApplyDiscoveredPeers(IReadOnlyList<LanPeer> peers)
     {
+        DiscoveredPeers = peers;
+        OnPropertyChanged(nameof(HasDiscoveredPeers));
+    }
+
+    /// 真的打开这一页才开始收发广播：不碰共享的人不应该被 UDP 的防火墙弹窗打扰。
+    private async Task StartDiscoveryIfNeededAsync()
+    {
+        if (_discovery is not null) return;
+        var settings = await _peerSettingsService.LoadAsync();
+        var discovery = new LanDiscovery(settings.Port + 1, () => PeerLocalName, settings.Port);
+        discovery.PeersChanged += peers => PeersDiscoveredHandler?.Invoke(peers);
+        _discovery = discovery;
+        try { await discovery.StartAsync(); }
+        catch (SocketException ex)
+        {
+            // 端口被别的程序占了就只能退回手输地址，共享本身还能用。
+            _discovery = null;
+            await AppLogger.ErrorAsync("LAN discovery could not bind its UDP port", ex);
+        }
+    }
+
+    private async Task GeneratePairingCodeAsync()    {
         var link = EnsureLink();
         await link.StartAsync();
         link.BeginPairing();
@@ -371,6 +427,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         Status = $"已保存 {profile.Name} 配置：{profile.ConnectionSummary}";
     }
 
+    /// 只改已有的按钮：新建入口已经去掉了，所以这里只会命中 UpdateAsync。
+    public async Task SaveProfileAsync(SwitchProfile profile)
+    {
+        await _profileService.UpdateAsync(profile);
+        MergeProfiles(await _profileService.LoadAsync());
+        UpdateCurrentProfileFromInputs();
+        UpdateSteadyStateStatus();
+        Status = $"已保存：{profile.Name}";
+    }
+
     private void UpdateCurrentProfileFromInputs()
     {
         var current = Monitors.Where(m => m.IsDdcSupported).ToDictionary(m => m.StableId, m => m.CurrentInputValue, StringComparer.Ordinal);
@@ -392,6 +458,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _lifetimeCancellation.Cancel();
         if (_identificationPresenter is IDisposable presenter) presenter.Dispose();
+        if (_discovery is not null) { var discovery = _discovery; _discovery = null; await discovery.DisposeAsync(); }
         if (_peerLink is not null) { var link = _peerLink; _peerLink = null; await link.DisposeAsync(); }
         await _ddcCiService.ShutdownAsync(timeout);
     }

@@ -37,6 +37,7 @@ public partial class MainWindow : Window
         // 实测回调会被静默丢掉；显式切回 Dispatcher 才保证在 UI 线程上执行。
         _viewModel.RemoteClipboardTextHandler = text => _ = Dispatcher.InvokeAsync(() => _clipboard?.ApplyRemoteText(text));
         _viewModel.RemoteClipboardFilesHandler = paths => _ = Dispatcher.InvokeAsync(() => _clipboard?.ApplyRemoteFiles(paths));
+        _viewModel.PeersDiscoveredHandler = peers => _ = Dispatcher.InvokeAsync(() => _viewModel.ApplyDiscoveredPeers(peers));
         _viewModel.PeerOfferHandler = offer => Dispatcher.InvokeAsync(() => AskFileOffer(offer)).Task;
         _viewModel.PeerConnected += () => _clipboard.CaptureBaseline();
         _pairingTick.Tick += (_, _) => _viewModel.RefreshPairingCountdown();
@@ -97,6 +98,17 @@ public partial class MainWindow : Window
         else if (e.Key == Key.Escape) { profile.CancelRenameCommand.Execute(null); e.Handled = true; }
     }
     private void ProfileNameEditor_LostFocus(object sender, RoutedEventArgs e) { if (sender is TextBox editor && editor.DataContext is ProfileViewModel profile && Mouse.LeftButton != MouseButtonState.Pressed) profile.CommitRenameCommand.Execute(null); }
+    private void LocalName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2) { _viewModel.BeginRenameLocalNameCommand.Execute(null); e.Handled = true; }
+    }
+    private void LocalNameRename_Click(object sender, RoutedEventArgs e) => _viewModel.BeginRenameLocalNameCommand.Execute(null);
+    private void LocalNameEditor_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { _viewModel.CommitRenameLocalNameCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.Escape) { _viewModel.CancelRenameLocalNameCommand.Execute(null); e.Handled = true; }
+    }
+    private void LocalNameEditor_LostFocus(object sender, RoutedEventArgs e) { if (Mouse.LeftButton != MouseButtonState.Pressed) _viewModel.CommitRenameLocalNameCommand.Execute(null); }
     private void MonitorName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ClickCount == 2 && sender is FrameworkElement element)
@@ -121,6 +133,20 @@ public partial class MainWindow : Window
     {
         if (sender is FrameworkElement element && element.DataContext is not null)
             new InputLearningWindow { Owner = this, DataContext = element.DataContext }.ShowDialog();
+    }
+    private void ProfileEdit_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveProfile(sender) is not { } profile) return;
+        var editor = new ProfileEditViewModel(profile.Profile, _viewModel.Monitors);
+        if (editor.Rows.Count == 0) { MessageBox.Show(this, "没有可以通过 DDC/CI 控制输入源的显示器。", "无法编辑", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        if (new ProfileEditWindow { Owner = this, DataContext = editor }.ShowDialog() != true) return;
+        _ = _viewModel.SaveProfileAsync(editor.Build());
+    }
+    private static ProfileViewModel? ResolveProfile(object? sender)
+    {
+        // 菜单项的 DataContext 继承不可靠，一律从 PlacementTarget 拿卡片上真正绑定的那个对象。
+        if (sender is not MenuItem item) return null;
+        return (item.Parent as ContextMenu)?.PlacementTarget is FrameworkElement target ? target.DataContext as ProfileViewModel : null;
     }
     private void ExternalMonitorFilter(object sender, FilterEventArgs e)
     {
