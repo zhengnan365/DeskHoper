@@ -4,6 +4,8 @@ using MonitorSwitch.Services;
 
 namespace MonitorSwitch.ViewModels;
 
+public enum AppSection { ScreenSwitch, Sharing, KeyboardMouse }
+
 public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly DdcCiService _ddcCiService = new();
@@ -38,6 +40,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SetMonitorInputCommand = new AsyncRelayCommand(parameter => parameter is MonitorInputRequest request ? request.Monitor.SetInputValueAsync(request.Value) : Task.CompletedTask);
         SetProjectionModeCommand = new AsyncRelayCommand(parameter => parameter is ProjectionMode mode ? SetProjectionAsync(mode) : Task.CompletedTask);
         IdentifyMonitorsCommand = new AsyncRelayCommand(IdentifyMonitorsAsync);
+        SelectSectionCommand = new AsyncRelayCommand(parameter => { if (parameter is string name && Enum.TryParse<AppSection>(name, out var section)) ActiveSection = section; return Task.CompletedTask; });
     }
     public ObservableCollection<MonitorViewModel> Monitors { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
@@ -84,14 +87,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         return _peerLink;
     }
 
-    public Task<bool> IsFileAutoAcceptEnabledAsync() => _peerSettingsService.LoadAsync().ContinueWith(task => task.Result.AutoAcceptFiles);
-
-    public async Task SetFileAutoAcceptAsync()
+    public Task SetFileAutoAcceptAsync()
     {
-        var settings = await _peerSettingsService.LoadAsync();
-        if (settings.AutoAcceptFiles) return;
-        await _peerSettingsService.SaveSettingsAsync(settings with { AutoAcceptFiles = true });
-        await AppLogger.InfoAsync("File auto-accept enabled for peer transfers");
+        AutoAcceptFiles = true;
+        return AppLogger.InfoAsync("File auto-accept enabled from the receive dialog");
     }
 
     public async Task SendClipboardFilesAsync(IReadOnlyList<string> paths)
@@ -111,6 +110,24 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     public void ReportStatus(string message) => Status = message;
 
+    private AppSection _activeSection = AppSection.ScreenSwitch;
+    private bool _autoAcceptFiles;
+    private string _peerLocalName = Environment.MachineName;
+    /// 当前显示哪一页：屏幕切换 / 共享 / 键鼠共享。
+    public AppSection ActiveSection { get => _activeSection; private set => SetProperty(ref _activeSection, value); }
+    public AsyncRelayCommand SelectSectionCommand { get; private set; } = null!;
+    public bool AutoAcceptFiles { get => _autoAcceptFiles; set { if (SetProperty(ref _autoAcceptFiles, value)) _ = SaveAutoAcceptFilesAsync(value); } }
+    public string PeerLocalName { get => _peerLocalName; private set => SetProperty(ref _peerLocalName, value); }
+    public string ReceiveDirectory => AppPaths.ReceivedFilesDirectory;
+
+    private async Task SaveAutoAcceptFilesAsync(bool enabled)
+    {
+        var settings = await _peerSettingsService.LoadAsync();
+        if (settings.AutoAcceptFiles == enabled) return;
+        await _peerSettingsService.SaveSettingsAsync(settings with { AutoAcceptFiles = enabled });
+        await AppLogger.InfoAsync($"File auto-accept {(enabled ? "enabled" : "disabled")}");
+    }
+
     public bool IsPeerConnected => _peerLink?.IsConnected == true;
     public string? PeerError => _peerLink?.LastError;
 
@@ -125,6 +142,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     };
 
     /// 没有配对过就既不建证书也不监听端口，避免第一次启动就悄悄往用户证书存储里写东西。
+    public async Task LoadPeerStateAsync()
+    {
+        var settings = await _peerSettingsService.LoadAsync();
+        PeerLocalName = settings.LocalName;
+        _autoAcceptFiles = settings.AutoAcceptFiles;
+        OnPropertyChanged(nameof(AutoAcceptFiles));
+    }
+
     public async Task StartPeerIfNeededAsync()
     {
         var settings = await _peerSettingsService.LoadAsync();

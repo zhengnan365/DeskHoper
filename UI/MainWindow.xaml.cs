@@ -20,7 +20,7 @@ public partial class MainWindow : Window
     private readonly List<string> _monitorOrder = [];
     private int _statusVersion;
     public string DisplayStatusText { get => (string)GetValue(DisplayStatusTextProperty); private set => SetValue(DisplayStatusTextProperty, value); }
-    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); _fileAutoAccept = await _viewModel.IsFileAutoAcceptEnabledAsync(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
+    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); await _viewModel.LoadPeerStateAsync(); _fileAutoAccept = _viewModel.AutoAcceptFiles; }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         var source = (HwndSource)PresentationSource.FromVisual(this)!;
