@@ -5,7 +5,7 @@
     <Grid Grid.Row="0" Margin="0,0,0,18" VerticalAlignment="Center"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Grid.Column="0" Text="MonitorSwitcher" Style="{StaticResource PageTitle}" VerticalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding DisplayStatusText, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SecondaryText}" HorizontalAlignment="Right" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" MaxWidth="240"/></Grid>
     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,16">
       <Button Content="屏幕切换" Command="{Binding SelectSectionCommand}" CommandParameter="ScreenSwitch"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource NavTab}"><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="ScreenSwitch"><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
-      <Button Content="共享" Command="{Binding SelectSectionCommand}" CommandParameter="Sharing"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource NavTab}"><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="Sharing"><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
+      <Button Content="文件共享" Command="{Binding SelectSectionCommand}" CommandParameter="Sharing"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource NavTab}"><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="Sharing"><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
       <Button Content="键鼠共享" Command="{Binding SelectSectionCommand}" CommandParameter="KeyboardMouse"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource NavTab}"><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="KeyboardMouse"><Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
     </StackPanel>
     <Grid Grid.Row="2">
@@ -34,21 +34,52 @@
         <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="Sharing"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
         <TextBlock Text="剪贴板与文件共享" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
         <TextBlock Text="只有本程序运行时才共享，关掉软件就停止。两台电脑都装同一个程序。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
-        <Border Background="{StaticResource SurfaceSecondaryBrush}" CornerRadius="{StaticResource Radius6}" Padding="12,10" Margin="0,0,0,12">
+        <Border Background="{StaticResource SurfaceSecondaryBrush}" CornerRadius="{StaticResource Radius6}" Padding="12,10" Margin="0,0,0,14">
           <StackPanel>
             <Grid Margin="0,0,0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="本机名称" Style="{StaticResource CaptionText}"/><TextBlock Grid.Column="1" Text="{Binding PeerLocalName, Mode=OneWay}" Style="{StaticResource BodyText}" HorizontalAlignment="Right"/></Grid>
+            <Grid Margin="0,0,0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="本机地址" Style="{StaticResource CaptionText}"/><TextBlock Grid.Column="1" Text="{Binding LocalIpAddressText, Mode=OneWay}" Style="{StaticResource BodyText}" HorizontalAlignment="Right"/></Grid>
             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="连接状态" Style="{StaticResource CaptionText}"/><TextBlock Grid.Column="1" Text="{Binding PeerStatusText}" Style="{StaticResource BodyText}" HorizontalAlignment="Right" TextTrimming="CharacterEllipsis" MaxWidth="300" TextAlignment="Right"/></Grid>
           </StackPanel>
         </Border>
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
-          <Button Content="生成配对码" Click="ShowPairingCode_Click" Style="{StaticResource CompactButton}"/>
-          <Button Content="连接对端" Click="ConnectPeer_Click" Style="{StaticResource CompactButton}" Margin="8,0,0,0"/>
-          <Button Content="断开" Click="DisconnectPeer_Click" Style="{StaticResource CompactButton}" Margin="8,0,0,0"/>
+        <Button Content="断开连接" Command="{Binding DisconnectPeerCommand}">
+          <Button.Style><Style TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,0,0,14"/><Style.Triggers><DataTrigger Binding="{Binding IsPeerConnected}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Button.Style>
+        </Button>
+        <StackPanel Margin="0,0,0,16">
+          <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding IsPeerConnected}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
+          <TextBlock Text="让对方连接我" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
+          <Button Content="生成配对码" Command="{Binding GeneratePairingCodeCommand}" HorizontalAlignment="Left">
+            <Button.Style><Style TargetType="Button" BasedOn="{StaticResource CompactButton}"><Setter Property="HorizontalAlignment" Value="Left"/><Style.Triggers><DataTrigger Binding="{Binding IsPairingCodeShown}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Button.Style>
+          </Button>
+          <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="{StaticResource Radius6}" Padding="12,10">
+            <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsPairingCodeShown}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
+            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <StackPanel Grid.Column="0"><TextBlock Text="{Binding LocalPairingCode}" FontSize="30" FontWeight="SemiBold" FontFamily="Global Monospace" Foreground="{StaticResource AccentBrush}"/><TextBlock Text="{Binding PairingCountdownText}" Style="{StaticResource CaptionText}" Margin="0,2,0,0"/></StackPanel>
+              <Button Grid.Column="1" Content="取消" Command="{Binding CancelPairingCodeCommand}" Style="{StaticResource CompactButton}" VerticalAlignment="Top"/>
+            </Grid>
+          </Border>
+          <TextBlock Text="对方在他自己的“我连接对方”里填上面这个本机地址和配对码。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+          <TextBlock Text="我连接对方" Style="{StaticResource FieldLabel}" Margin="0,18,0,6"/>
+          <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock Text="对端地址" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" Style="{StaticResource FieldTextBox}" Text="{Binding PeerHost, UpdateSourceTrigger=PropertyChanged}"/>
+          </Grid>
+          <Grid Margin="0,0,0,10"><Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock Text="对方屏幕上的 6 位配对码" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" Style="{StaticResource FieldTextBox}" MaxLength="6" HorizontalAlignment="Left" Width="110" Text="{Binding PeerCode, UpdateSourceTrigger=PropertyChanged}"/>
+          </Grid>
+          <Button Content="连接" Command="{Binding ConnectPeerCommand}" IsEnabled="{Binding CanConnectPeer}" Style="{StaticResource AccentButton}" HorizontalAlignment="Left" Width="88"/>
+          <TextBlock Text="{Binding PeerConnectError}">
+            <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource ErrorText}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Margin" Value="0,8,0,0"/><Style.Triggers><DataTrigger Binding="{Binding ShowConnectError}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+          </TextBlock>
         </StackPanel>
-        <TextBlock Text="对方点“生成配对码”会看到 6 位数字，你在这里填对方 IP 和那个码。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,14"/>
-        <TextBlock Text="收到的文件" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
-        <CheckBox Content="以后自动接收，不再询问" IsChecked="{Binding AutoAcceptFiles}" Margin="0,0,0,8"/>
-        <TextBlock Style="{StaticResource CaptionText}" TextWrapping="Wrap"><Run Text="保存到："/><Run Text="{Binding ReceiveDirectory, Mode=OneWay}"/></TextBlock>
+        <TextBlock Text="接收设置" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+        <CheckBox Content="收到文件时自动接收，不再询问" IsChecked="{Binding AutoAcceptFiles}" Margin="0,0,0,10"/>
+        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <TextBlock Text="文件保存到" Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+          <Border Grid.Column="1" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="{StaticResource Radius6}" Padding="8,6" MinHeight="32" VerticalAlignment="Center"><TextBlock Text="{Binding ReceiveDirectory, Mode=OneWay}" TextTrimming="CharacterEllipsis" ToolTip="{Binding ReceiveDirectory}" Style="{StaticResource BodyText}" VerticalAlignment="Center"/></Border>
+          <Button Grid.Column="2" Content="选择文件夹" Click="ChooseReceiveDirectory_Click" Style="{StaticResource CompactButton}" Margin="8,0,0,0"/>
+        </Grid>
+        <TextBlock Text="在别的电脑上复制文件，收到的文件就落在这个文件夹里。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
       </StackPanel>
       <StackPanel>
         <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding ActiveSection}" Value="KeyboardMouse"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>

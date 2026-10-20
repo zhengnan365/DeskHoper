@@ -54,6 +54,8 @@ public sealed class PeerLink : IAsyncDisposable
     public string? RemoteFingerprint { get; private set; }
     public string? LastError { get; private set; }
     public string? LocalPairingCode => _pairingExpiresAt > DateTimeOffset.UtcNow ? _pairingCode : null;
+    /// 配对码剩余有效期。没在配对时为 null，界面用它做倒计时并在到点时自己收起。
+    public TimeSpan? PairingTimeLeft => LocalPairingCode is null ? null : _pairingExpiresAt - DateTimeOffset.UtcNow;
     public int Port { get; private set; }
     public bool IsConnected => _session is not null;
     public event Action? StateChanged;
@@ -61,7 +63,11 @@ public sealed class PeerLink : IAsyncDisposable
     /// 对端要发文件时由界面决定收不收（后台线程调用，实现自己负责切回 UI 线程）。
     public Func<FileOffer, Task<bool>>? OfferHandler { get; set; }
     public event Action<IReadOnlyList<string>>? FilesReceived;
-    public string ReceiveDirectory => AppPaths.ReceivedFilesDirectory;
+    private string _receiveDirectory = AppPaths.ReceivedFilesDirectory;
+    public string ReceiveDirectory => _receiveDirectory;
+    public static string ResolveReceiveDirectory(string? directory) => string.IsNullOrWhiteSpace(directory) ? AppPaths.ReceivedFilesDirectory : directory.Trim();
+    /// 界面上改了接收目录就立刻生效，不用等重开程序。
+    public void ApplyReceiveDirectory(string? directory) => _receiveDirectory = ResolveReceiveDirectory(directory);
 
     public async Task StartAsync()
     {
@@ -69,6 +75,7 @@ public sealed class PeerLink : IAsyncDisposable
         var settings = await _settingsService.LoadAsync();
         LocalName = settings.LocalName;
         Port = settings.Port;
+        ApplyReceiveDirectory(settings.ReceiveDirectory);
         _lifetime = new CancellationTokenSource();
         _listener = new TcpListener(IPAddress.Any, settings.Port);
         try

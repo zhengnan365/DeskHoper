@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Data;
+using System.Windows.Threading;
+using Microsoft.Win32;
 using MonitorSwitch.Services;
 using MonitorSwitch.ViewModels;
 
@@ -14,13 +16,13 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private HotkeyService? _hotkeys;
     private ClipboardService? _clipboard;
-    private bool _fileAutoAccept;
     private Point _monitorDragStart;
     private MonitorViewModel? _draggedMonitor;
     private readonly List<string> _monitorOrder = [];
     private int _statusVersion;
+    private readonly DispatcherTimer _pairingTick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
     public string DisplayStatusText { get => (string)GetValue(DisplayStatusTextProperty); private set => SetValue(DisplayStatusTextProperty, value); }
-    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); await _viewModel.LoadPeerStateAsync(); _fileAutoAccept = _viewModel.AutoAcceptFiles; }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
+    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); await _viewModel.LoadPeerStateAsync(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         var source = (HwndSource)PresentationSource.FromVisual(this)!;
@@ -37,34 +39,22 @@ public partial class MainWindow : Window
         _viewModel.RemoteClipboardFilesHandler = paths => _ = Dispatcher.InvokeAsync(() => _clipboard?.ApplyRemoteFiles(paths));
         _viewModel.PeerOfferHandler = offer => Dispatcher.InvokeAsync(() => AskFileOffer(offer)).Task;
         _viewModel.PeerConnected += () => _clipboard.CaptureBaseline();
+        _pairingTick.Tick += (_, _) => _viewModel.RefreshPairingCountdown();
     }
     private bool AskFileOffer(FileOffer offer)
     {
-        if (_fileAutoAccept) return true;
-        var editor = new FileOfferViewModel(offer, AppPaths.ReceivedFilesDirectory, autoAcceptEnabled: true);
+        if (_viewModel.AutoAcceptFiles) return true;
+        var editor = new FileOfferViewModel(offer, _viewModel.ReceiveDirectory, autoAcceptEnabled: true);
         if (new FileReceiveWindow { Owner = this, DataContext = editor }.ShowDialog() != true) return false;
-        if (editor.AutoAcceptChosen) { _fileAutoAccept = true; _ = _viewModel.SetFileAutoAcceptAsync(); }
+        if (editor.AutoAcceptChosen) _viewModel.AutoAcceptFiles = true;
         return true;
     }
-    private async void ShowPairingCode_Click(object sender, RoutedEventArgs e)
+    private void ChooseReceiveDirectory_Click(object sender, RoutedEventArgs e)
     {
-        var code = await _viewModel.ShowPairingCodeAsync();
-        var window = new PeerPairingWindow { Owner = this, DataContext = new PeerPairingViewModel(isConnectMode: false, code) };
-        window.ShowDialog();
-        if (window.CodeCancelled) _viewModel.CancelPairing();
+        var dialog = new OpenFolderDialog { Title = "选择收到文件的存放文件夹", Multiselect = false, InitialDirectory = _viewModel.ReceiveDirectory };
+        if (dialog.ShowDialog(this) != true) return;
+        _ = _viewModel.SetReceiveDirectoryAsync(dialog.FolderName);
     }
-    private async void ConnectPeer_Click(object sender, RoutedEventArgs e)
-    {
-        var editor = new PeerPairingViewModel(isConnectMode: true);
-        if (new PeerPairingWindow { Owner = this, DataContext = editor }.ShowDialog() != true) return;
-        if (await _viewModel.ConnectPeerAsync(editor.Host.Trim(), editor.Code.Trim()))
-        {
-            _viewModel.ReportStatus("剪贴板共享已连接");
-            return;
-        }
-        MessageBox.Show(this, $"连接失败：{_viewModel.PeerError ?? "未知原因"}\n\n请确认对端已经点“生成配对码”，并且两台电脑在同一局域网。", "无法连接对端", MessageBoxButton.OK, MessageBoxImage.Warning);
-    }
-    private async void DisconnectPeer_Click(object sender, RoutedEventArgs e) => await _viewModel.DisconnectPeerAsync();
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -79,6 +69,11 @@ public partial class MainWindow : Window
     }
     private async void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(MainViewModel.IsPairingCodeShown))
+        {
+            // 只在配对码真的显示时才走这一秒一次的倒计时，码一过期就自动停下。
+            if (_viewModel.IsPairingCodeShown) _pairingTick.Start(); else _pairingTick.Stop();
+        }
         if (e.PropertyName != nameof(MainViewModel.CurrentStatusText)) return;
         var version = ++_statusVersion;
         var status = _viewModel.CurrentStatusText;

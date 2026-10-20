@@ -40,10 +40,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SetMonitorInputCommand = new AsyncRelayCommand(parameter => parameter is MonitorInputRequest request ? request.Monitor.SetInputValueAsync(request.Value) : Task.CompletedTask);
         SetProjectionModeCommand = new AsyncRelayCommand(parameter => parameter is ProjectionMode mode ? SetProjectionAsync(mode) : Task.CompletedTask);
         IdentifyMonitorsCommand = new AsyncRelayCommand(IdentifyMonitorsAsync);
-        SelectSectionCommand = new AsyncRelayCommand(parameter => { if (parameter is string name && Enum.TryParse<AppSection>(name, out var section)) ActiveSection = section; return Task.CompletedTask; });
+        SelectSectionCommand = new AsyncRelayCommand(parameter => { if (parameter is string name && Enum.TryParse<AppSection>(name, out var section)) { ActiveSection = section; if (section == AppSection.Sharing) EnsureLocalIpAddressDetected(); } return Task.CompletedTask; });
+        GeneratePairingCodeCommand = new AsyncRelayCommand(GeneratePairingCodeAsync);
+        CancelPairingCodeCommand = new AsyncRelayCommand(CancelPairingCodeAsync);
+        ConnectPeerCommand = new AsyncRelayCommand(ConnectPeerAsync);
+        DisconnectPeerCommand = new AsyncRelayCommand(DisconnectPeerAsync);
     }
     public ObservableCollection<MonitorViewModel> Monitors { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
+    public AsyncRelayCommand GeneratePairingCodeCommand { get; }
+    public AsyncRelayCommand CancelPairingCodeCommand { get; }
+    public AsyncRelayCommand ConnectPeerCommand { get; }
+    public AsyncRelayCommand DisconnectPeerCommand { get; }
     public AsyncRelayCommand SetInternalProjectionCommand { get; }
     public AsyncRelayCommand SetDuplicateProjectionCommand { get; }
     public AsyncRelayCommand SetExtendProjectionCommand { get; }
@@ -87,12 +95,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         return _peerLink;
     }
 
-    public Task SetFileAutoAcceptAsync()
-    {
-        AutoAcceptFiles = true;
-        return AppLogger.InfoAsync("File auto-accept enabled from the receive dialog");
-    }
-
     public async Task SendClipboardFilesAsync(IReadOnlyList<string> paths)
     {
         var link = _peerLink;
@@ -105,6 +107,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         OnPropertyChanged(nameof(IsPeerConnected));
         OnPropertyChanged(nameof(PeerStatusText));
+        OnPropertyChanged(nameof(LocalPairingCode));
+        OnPropertyChanged(nameof(IsPairingCodeShown));
         if (_peerLink?.IsConnected == true) PeerConnected?.Invoke();
     }
 
@@ -113,12 +117,32 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private AppSection _activeSection = AppSection.ScreenSwitch;
     private bool _autoAcceptFiles;
     private string _peerLocalName = Environment.MachineName;
-    /// 当前显示哪一页：屏幕切换 / 共享 / 键鼠共享。
+    private string _peerHost = string.Empty;
+    private string _peerCode = string.Empty;
+    private string? _peerConnectError;
+    private string _receiveDirectory = AppPaths.ReceivedFilesDirectory;
+    private string _pairingCountdownText = string.Empty;
+    private string _localIpAddress = string.Empty;
+    /// 当前显示哪一页：屏幕切换 / 文件共享 / 键鼠共享。
     public AppSection ActiveSection { get => _activeSection; private set => SetProperty(ref _activeSection, value); }
     public AsyncRelayCommand SelectSectionCommand { get; private set; } = null!;
     public bool AutoAcceptFiles { get => _autoAcceptFiles; set { if (SetProperty(ref _autoAcceptFiles, value)) _ = SaveAutoAcceptFilesAsync(value); } }
     public string PeerLocalName { get => _peerLocalName; private set => SetProperty(ref _peerLocalName, value); }
-    public string ReceiveDirectory => AppPaths.ReceivedFilesDirectory;
+    /// 对端要往哪台机器上连，所以这一页得把本机 IP 显示出来。第一次进这一页时才查，不占启动时间。
+    public string LocalIpAddressText { get => _localIpAddress; private set => SetProperty(ref _localIpAddress, value); }
+    private void EnsureLocalIpAddressDetected()
+    {
+        if (_localIpAddress.Length > 0) return;
+        try
+        {
+            LocalIpAddressText = System.Net.Dns.GetHostAddresses(System.Net.Dns.GetHostName())
+                .Where(address => address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && !System.Net.IPAddress.IsLoopback(address))
+                .Select(address => address.ToString()).FirstOrDefault() ?? "未识别，请手动查本机 IP";
+        }
+        catch (Exception ex) { LocalIpAddressText = "未识别，请手动查本机 IP"; _ = AppLogger.ErrorAsync("Local IPv4 detection failed", ex); }
+    }
+    public string ReceiveDirectory { get => _receiveDirectory; private set => SetProperty(ref _receiveDirectory, value); }
+    public bool IsReceiveDirectoryCustom => !string.Equals(_receiveDirectory, AppPaths.ReceivedFilesDirectory, StringComparison.OrdinalIgnoreCase);
 
     private async Task SaveAutoAcceptFilesAsync(bool enabled)
     {
@@ -128,18 +152,50 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         await AppLogger.InfoAsync($"File auto-accept {(enabled ? "enabled" : "disabled")}");
     }
 
+    /// 界面上选的接收文件夹，传 null 或空表示回到默认目录。选完立刻生效，不用重开程序。
+    public async Task SetReceiveDirectoryAsync(string? directory)
+    {
+        var settings = await _peerSettingsService.LoadAsync();
+        if (string.Equals(settings.ReceiveDirectory?.Trim(), directory?.Trim(), StringComparison.OrdinalIgnoreCase)) return;
+        await _peerSettingsService.SaveSettingsAsync(settings with { ReceiveDirectory = directory });
+        _peerLink?.ApplyReceiveDirectory(directory);
+        ReceiveDirectory = PeerLink.ResolveReceiveDirectory(directory);
+        OnPropertyChanged(nameof(IsReceiveDirectoryCustom));
+        ReportStatus($"收到的文件保存到 {ReceiveDirectory}");
+        await AppLogger.InfoAsync($"Receive directory changed to {ReceiveDirectory}");
+    }
+
     public bool IsPeerConnected => _peerLink?.IsConnected == true;
-    public string? PeerError => _peerLink?.LastError;
+
+    /// 直接显示在页面上的 6 位配对码，过期后自动变 null。
+    public string? LocalPairingCode => _peerLink?.LocalPairingCode;
+    public bool IsPairingCodeShown => LocalPairingCode is not null;
+    public string PairingCountdownText { get => _pairingCountdownText; private set => SetProperty(ref _pairingCountdownText, value); }
+    public string PeerHost { get => _peerHost; set { if (SetProperty(ref _peerHost, value)) { OnPropertyChanged(nameof(CanConnectPeer)); PeerConnectError = null; } } }
+    public string PeerCode { get => _peerCode; set { if (SetProperty(ref _peerCode, value)) { OnPropertyChanged(nameof(CanConnectPeer)); PeerConnectError = null; } } }
+    public bool CanConnectPeer => !string.IsNullOrWhiteSpace(_peerHost) && _peerCode.Trim().Length == 6 && _peerCode.Trim().All(char.IsDigit);
+    public string? PeerConnectError { get => _peerConnectError; private set { if (SetProperty(ref _peerConnectError, value)) OnPropertyChanged(nameof(ShowConnectError)); } }
+    public bool ShowConnectError => !string.IsNullOrEmpty(_peerConnectError);
 
     public string PeerStatusText => _peerLink switch
     {
         null => "共享未启用",
         _ when _peerLink.State == PeerLinkState.Connected => $"已连接：{_peerLink.RemoteName}",
-        _ when _peerLink.State == PeerLinkState.WaitingForPairing => $"等待配对，本机配对码 {_peerLink.LocalPairingCode}",
+        _ when LocalPairingCode is { } code => $"等待配对，配对码 {code}",
         _ when _peerLink.State == PeerLinkState.Connecting => "正在连接对端…",
         _ when _peerLink.State == PeerLinkState.Failed => $"上次连接失败：{_peerLink.LastError ?? "未知原因"}",
         _ => "未配对"
     };
+
+    /// 界面每秒调一次：刷新倒计时。配对码一过期，页面上的码自己收回去。
+    public void RefreshPairingCountdown()
+    {
+        var left = _peerLink?.PairingTimeLeft;
+        PairingCountdownText = left is null ? string.Empty : $"剩 {(int)left.Value.TotalMinutes}:{left.Value.Seconds:00} 有效";
+        OnPropertyChanged(nameof(LocalPairingCode));
+        OnPropertyChanged(nameof(IsPairingCodeShown));
+        OnPropertyChanged(nameof(PeerStatusText));
+    }
 
     /// 没有配对过就既不建证书也不监听端口，避免第一次启动就悄悄往用户证书存储里写东西。
     public async Task LoadPeerStateAsync()
@@ -148,6 +204,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         PeerLocalName = settings.LocalName;
         _autoAcceptFiles = settings.AutoAcceptFiles;
         OnPropertyChanged(nameof(AutoAcceptFiles));
+        ReceiveDirectory = PeerLink.ResolveReceiveDirectory(settings.ReceiveDirectory);
+        OnPropertyChanged(nameof(IsReceiveDirectoryCustom));
+        if (string.IsNullOrEmpty(_peerHost)) PeerHost = settings.LastPeerHost ?? string.Empty;
     }
 
     public async Task StartPeerIfNeededAsync()
@@ -158,31 +217,37 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(PeerStatusText));
     }
 
-    public async Task<string> ShowPairingCodeAsync()
+    private async Task GeneratePairingCodeAsync()
     {
         var link = EnsureLink();
         await link.StartAsync();
-        var code = link.BeginPairing();
-        OnPropertyChanged(nameof(PeerStatusText));
-        return code;
+        link.BeginPairing();
+        RefreshPairingCountdown();
+        ReportStatus("把配对码告诉对方，5 分钟内有效");
     }
 
-    public void CancelPairing()
+    private Task CancelPairingCodeAsync()
     {
         _peerLink?.CancelPairing();
-        OnPropertyChanged(nameof(PeerStatusText));
+        RefreshPairingCountdown();
+        return Task.CompletedTask;
     }
 
-    public async Task<bool> ConnectPeerAsync(string host, string code)
+    private async Task ConnectPeerAsync()
     {
+        if (!CanConnectPeer) { PeerConnectError = "请填写对端 IP 和 6 位配对码。"; return; }
         var link = EnsureLink();
         await link.StartAsync();
-        var connected = await link.ConnectAsync(host, code);
-        OnPropertyChanged(nameof(PeerStatusText));
-        return connected;
+        if (!await link.ConnectAsync(PeerHost.Trim(), PeerCode.Trim()))
+        {
+            PeerConnectError = link.LastError ?? "连不上对端，请确认两台电脑在同一局域网。";
+            return;
+        }
+        PeerConnectError = null;
+        ReportStatus("剪贴板共享已连接");
     }
 
-    public async Task DisconnectPeerAsync()
+    private async Task DisconnectPeerAsync()
     {
         if (_peerLink is null) return;
         await _peerLink.DisconnectAsync();
