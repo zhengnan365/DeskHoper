@@ -31,9 +31,10 @@ public partial class MainWindow : Window
         _clipboard.LocalTextChanged += text => _ = _viewModel.SendClipboardTextAsync(text);
         _clipboard.LocalFilesChanged += paths => _ = _viewModel.SendClipboardFilesAsync(paths);
         _clipboard.TextRejected += message => _viewModel.ReportStatus(message);
-        // 对端的内容是从后台线程送上来的，Progress 会把它送回 UI 线程再写剪贴板。
-        _viewModel.RemoteClipboardTextHandler = new Progress<string>(text => _clipboard.ApplyRemoteText(text));
-        _viewModel.RemoteClipboardFilesHandler = new Progress<IReadOnlyList<string>>(paths => _clipboard.ApplyRemoteFiles(paths));
+        // 对端内容来自后台线程。这里不用 Progress<T>：它在 SourceInitialized 阶段抓到的同步上下文不可靠，
+        // 实测回调会被静默丢掉；显式切回 Dispatcher 才保证在 UI 线程上执行。
+        _viewModel.RemoteClipboardTextHandler = text => _ = Dispatcher.InvokeAsync(() => _clipboard?.ApplyRemoteText(text));
+        _viewModel.RemoteClipboardFilesHandler = paths => _ = Dispatcher.InvokeAsync(() => _clipboard?.ApplyRemoteFiles(paths));
         _viewModel.PeerOfferHandler = offer => Dispatcher.InvokeAsync(() => AskFileOffer(offer)).Task;
         _viewModel.PeerConnected += () => _clipboard.CaptureBaseline();
     }

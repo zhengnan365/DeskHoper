@@ -64,11 +64,12 @@ public sealed class ClipboardService : IDisposable
     {
         _lastKnownText = text;
         _lastKnownFiles = null;
-        if (ClipboardSyncPolicy.HasChanged(ReadText(), text))
+        if (!ClipboardSyncPolicy.HasChanged(ReadText(), text))
         {
-            try { Clipboard.SetText(text); }
-            catch (Exception ex) { _ = AppLogger.ErrorAsync("写入剪贴板失败", ex); }
+            _ = AppLogger.InfoAsync($"Clipboard from peer already present, skipped write ({text.Length} chars)");
+            return;
         }
+        SetWithRetry(() => Clipboard.SetText(text), "写入剪贴板失败");
     }
 
     public void ApplyRemoteFiles(IReadOnlyList<string> paths)
@@ -77,13 +78,32 @@ public sealed class ClipboardService : IDisposable
         _lastKnownText = null;
         var current = ReadFiles();
         if (current is not null && current.SequenceEqual(_lastKnownFiles)) return;
-        try
+        var collection = new StringCollection();
+        collection.AddRange(paths.ToArray());
+        SetWithRetry(() => Clipboard.SetFileDropList(collection), "写入剪贴板文件列表失败");
+    }
+
+    /// 剪贴板是全局互斥资源，别的进程正打开时 OpenClipboard 会直接抛 CLIPBRD_E_CANT_OPEN。
+    /// 这里必须在 UI 线程上调用，所以重试次数和间隔要克制：太短会偶发同步不上，太长会卡住界面。
+    private const int WriteAttempts = 12;
+    private const int WriteRetryDelayMs = 80;
+
+    private void SetWithRetry(Action set, string failureMessage)
+    {
+        for (var attempt = 1; ; attempt++)
         {
-            var collection = new StringCollection();
-            collection.AddRange(paths.ToArray());
-            Clipboard.SetFileDropList(collection);
+            try { set(); return; }
+            catch (Exception ex)
+            {
+                if (attempt >= WriteAttempts)
+                {
+                    _ = AppLogger.ErrorAsync($"{failureMessage}（已重试 {attempt} 次）", ex);
+                    TextRejected?.Invoke("剪贴板正被其他程序占用，这次没有同步过去。");
+                    return;
+                }
+                Thread.Sleep(WriteRetryDelayMs);
+            }
         }
-        catch (Exception ex) { _ = AppLogger.ErrorAsync("写入剪贴板文件列表失败", ex); }
     }
 
     private static string? ReadText()

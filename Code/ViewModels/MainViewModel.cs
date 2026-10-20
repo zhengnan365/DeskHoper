@@ -68,10 +68,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private void UpdateSteadyStateStatus() { Status = CurrentProfile is not null ? $"当前：{CurrentProfile.DisplayName}" : Monitors.Any(m => m.IsDdcSupported && m.CurrentInputValue.HasValue) ? "当前：自定义组合" : "已就绪"; }
     private readonly PeerSettingsService _peerSettingsService = new();
     private PeerLink? _peerLink;
-    /// 对端推来的剪贴板文本。由界面赋成一个 Progress&lt;string&gt;，因此可以从后台线程安全回调。
-    public IProgress<string>? RemoteClipboardTextHandler { get; set; }
-    /// 对端推来的文件列表（已落地），同样由界面赋成 Progress 以切回 UI 线程。
-    public IProgress<IReadOnlyList<string>>? RemoteClipboardFilesHandler { get; set; }
+    /// 对端推来的剪贴板文本。由界面赋值，实现自己负责切回 UI 线程。
+    public Action<string>? RemoteClipboardTextHandler { get; set; }
+    /// 对端推来的文件列表（已落地），同样由界面赋值并切回 UI 线程。
+    public Action<IReadOnlyList<string>>? RemoteClipboardFilesHandler { get; set; }
     /// 询问收不收文件。由界面赋值，会在后台线程被调用，实现自己负责切回 UI 线程。
     public Func<FileOffer, Task<bool>>? PeerOfferHandler { get; set; }
     public event Action? PeerConnected;
@@ -81,8 +81,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (_peerLink is not null) return _peerLink;
         _peerLink = new PeerLink(_peerSettingsService, PeerIdentity.LoadOrCreate($"MonitorSwitcher Peer {Environment.MachineName}"));
         _peerLink.StateChanged += OnPeerStateChanged;
-        _peerLink.TextReceived += text => RemoteClipboardTextHandler?.Report(text);
-        _peerLink.FilesReceived += paths => RemoteClipboardFilesHandler?.Report(paths);
+        _peerLink.TextReceived += text => RemoteClipboardTextHandler?.Invoke(text);
+        _peerLink.FilesReceived += paths => RemoteClipboardFilesHandler?.Invoke(paths);
         _peerLink.OfferHandler = offer => PeerOfferHandler is { } handler ? handler(offer) : Task.FromResult(false);
         return _peerLink;
     }
