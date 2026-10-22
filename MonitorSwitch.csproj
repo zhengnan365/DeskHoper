@@ -18,7 +18,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PlatformTarget>x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
-    <ApplicationIcon>UI\Assets\MonitorSwitch.ico</ApplicationIcon>
+    <ApplicationIcon>UI\Assets\DeskHoper.ico</ApplicationIcon>
     <!-- 运行时包会带上 13 种语言的资源目录，实测 26MB；界面只有中文，保留 zh-Hans 可省 14.4MB -->
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
