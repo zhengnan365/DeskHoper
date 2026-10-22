@@ -29,7 +29,7 @@
     <Using Remove="System.Drawing" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Remove="MonitorSwitch.Tests\**\*.cs" />
+    <Compile Remove="DeskHoper.Tests\**\*.cs" />
   </ItemGroup>
   <ItemGroup>
     <Page Remove="UI\App.xaml" />
@@ -41,7 +41,7 @@
   <ItemGroup>
     <!-- 让回归测试能直接驱动 internal 的接收落盘状态机（恶意文件名那条用例必须能测） -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
-      <_Parameter1>MonitorSwitch.Tests</_Parameter1>
+      <_Parameter1>DeskHoper.Tests</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 </Project>

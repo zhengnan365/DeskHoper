@@ -99,9 +99,9 @@
 ## 构建
 
 ```powershell
-dotnet build MonitorSwitch.sln
-dotnet build MonitorSwitch.sln -c Release
-dotnet publish MonitorSwitch.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish\v2.2.0-win-x64
+dotnet build DeskHoper.sln
+dotnet build DeskHoper.sln -c Release
+dotnet publish DeskHoper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish\v2.2.0-win-x64
 ```
 
 发布结果是 `DeskHoper.exe` + 5 个 WPF 原生 dll，**整个文件夹一起拷走**（不再往临时目录解压，首次启动更快）。self-contained，目标机不需要装 .NET Runtime。配置目录 `DeskHoper-config` 由程序首次运行时在 exe 旁边创建，不要打进发布包。
@@ -111,7 +111,7 @@ dotnet publish MonitorSwitch.csproj -c Release -r win-x64 --self-contained true 
 回归测试是独立的控制台工程，不依赖测试框架：
 
 ```powershell
-dotnet run --project MonitorSwitch.Tests/MonitorSwitch.Tests.csproj -c Debug
+dotnet run --project DeskHoper.Tests/DeskHoper.Tests.csproj -c Debug
 ```
 
 8 组契约测试：投影模式、逐台 Profile、显示器偏好与输入源学习、切换按钮编辑、配对与加密链路、文件传输与接收路径安全、键鼠转发闸门、只走物理网卡的地址选择。

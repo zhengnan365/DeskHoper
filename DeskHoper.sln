@@ -2,9 +2,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MonitorSwitch", "MonitorSwitch.csproj", "{EFDAB3E9-1504-4B51-9219-2FE57E0D2D2E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeskHoper", "DeskHoper.csproj", "{EFDAB3E9-1504-4B51-9219-2FE57E0D2D2E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MonitorSwitch.Tests", "MonitorSwitch.Tests\MonitorSwitch.Tests.csproj", "{83B9C9CE-29C5-4DCF-9875-0C8FEB228AE1}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeskHoper.Tests", "DeskHoper.Tests\DeskHoper.Tests.csproj", "{83B9C9CE-29C5-4DCF-9875-0C8FEB228AE1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
