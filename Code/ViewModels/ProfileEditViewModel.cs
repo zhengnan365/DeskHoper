@@ -28,6 +28,13 @@ public sealed class ProfileEditRow : ObservableObject
     public string Title => Monitor.DisplayTitle;
     public IReadOnlyList<ProfileInputOption> Options { get; }
     public ProfileInputOption? SelectedOption { get => _selectedOption; set => SetProperty(ref _selectedOption, value); }
+
+    /// 把这台显示器现在的输入源填进来，等价于原来右键的"保存当前配置"。
+    public void SelectCurrent()
+    {
+        if (Monitor.CurrentInputValue is { } current)
+            SelectedOption = Options.FirstOrDefault(option => option.Input == current) ?? SelectedOption;
+    }
 }
 
 public sealed class ProfileEditViewModel : ObservableObject
@@ -49,7 +56,11 @@ public sealed class ProfileEditViewModel : ObservableObject
         ];
         SelectedProjection = ProjectionOptions.FirstOrDefault(option => option.Mode == source.ProjectionMode) ?? ProjectionOptions[0];
         Rows = [.. monitors.Where(monitor => monitor.IsDdcSupported).Select(monitor => new ProfileEditRow(monitor, source.Monitors.FirstOrDefault(target => target.StableId == monitor.StableId)))];
+        UseCurrentInputsCommand = new AsyncRelayCommand(() => { foreach (var row in Rows) row.SelectCurrent(); return Task.CompletedTask; });
     }
+
+    /// 把每台显示器现在的输入源填进来，等价于原来右键菜单里的"保存当前配置"。
+    public AsyncRelayCommand UseCurrentInputsCommand { get; }
 
     public string? ProfileId { get; }
     public string WindowTitle => "编辑切换按钮";

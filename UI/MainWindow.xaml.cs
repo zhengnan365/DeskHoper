@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Input;
@@ -18,11 +19,21 @@ public partial class MainWindow : Window
     private ClipboardService? _clipboard;
     private Point _monitorDragStart;
     private MonitorViewModel? _draggedMonitor;
+    private bool _monitorTitleDoubleClick;
     private readonly List<string> _monitorOrder = [];
     private int _statusVersion;
+    private readonly SettingsService _appSettings = new();
+    private TrayService? _tray;
+    private bool _exitRequested;
+    // 关闭行为在启动时读进内存：OnClosing 里绝对不能 await，
+    // WPF 是在处理器同步返回后才看 e.Cancel 的，一 await 就等于放行了这次关闭。
+    private bool _closeActionDecided;
+    private bool _closeHidesToTray = true;
     private readonly DispatcherTimer _pairingTick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _inputStatsTick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _transferTick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
     public string DisplayStatusText { get => (string)GetValue(DisplayStatusTextProperty); private set => SetValue(DisplayStatusTextProperty, value); }
-    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); await _viewModel.LoadPeerStateAsync(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; }
+    public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); await _viewModel.LoadPeerStateAsync(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; Loaded += async (_, _) => { var app = await new SettingsService().LoadAsync(); _closeActionDecided = app.CloseActionDecided; _closeHidesToTray = app.MinimizeToTrayOnClose; _tray ??= new TrayService(ShowFromTray, ExitFromTray, () => _viewModel.DesktopSwitchCommand.Execute(null), () => _viewModel.LaptopSwitchCommand.Execute(null)); }; }
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         var source = (HwndSource)PresentationSource.FromVisual(this)!;
@@ -31,7 +42,6 @@ public partial class MainWindow : Window
         _hotkeys.Register(HotkeyService.ModifierKeys.Control | HotkeyService.ModifierKeys.Alt, 0x32, () => _viewModel.LaptopSwitchCommand.Execute(null), out _);
         _clipboard = new ClipboardService(source);
         _clipboard.LocalTextChanged += text => _ = _viewModel.SendClipboardTextAsync(text);
-        _clipboard.LocalFilesChanged += paths => _ = _viewModel.SendClipboardFilesAsync(paths);
         _clipboard.TextRejected += message => _viewModel.ReportStatus(message);
         // 对端内容来自后台线程。这里不用 Progress<T>：它在 SourceInitialized 阶段抓到的同步上下文不可靠，
         // 实测回调会被静默丢掉；显式切回 Dispatcher 才保证在 UI 线程上执行。
@@ -41,6 +51,11 @@ public partial class MainWindow : Window
         _viewModel.PeerOfferHandler = offer => Dispatcher.InvokeAsync(() => AskFileOffer(offer)).Task;
         _viewModel.PeerConnected += () => _clipboard.CaptureBaseline();
         _pairingTick.Tick += (_, _) => _viewModel.RefreshPairingCountdown();
+        // 传输结果只在屏幕上停一小会儿，到点自己收回去；只有真有文案挂着才跑这一秒一跳。
+        _transferTick.Tick += (_, _) => { _viewModel.RefreshTransferStatus(); if (!_viewModel.HasTransferStatus) _transferTick.Stop(); };
+        // 只有停在这一页时才刷数字，离开就别白烧定时器。
+        _inputStatsTick.Tick += (_, _) => { if (_viewModel.ActiveSection == AppSection.KeyboardMouse) _viewModel.RefreshInputStats(); };
+        _inputStatsTick.Start();
     }
     private bool AskFileOffer(FileOffer offer)
     {
@@ -50,14 +65,77 @@ public partial class MainWindow : Window
         if (editor.AutoAcceptChosen) _viewModel.AutoAcceptFiles = true;
         return true;
     }
-    private void ChooseReceiveDirectory_Click(object sender, RoutedEventArgs e)
+    private void SendFiles_DragOver(object sender, DragEventArgs e)
     {
+        var canDrop = _viewModel.IsPeerConnected && e.Data.GetDataPresent(DataFormats.FileDrop);
+        // 重新拖进来就把上一次的"发送成功/失败"清掉，拖放区回到提示文案
+        if (canDrop) _viewModel.ClearTransferStatus();
+        e.Effects = canDrop ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private async void SendFiles_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] dropped) return;
+        // 只发真实存在的文件：拖进来一个已经移走的项，对面会拿到打不开的东西。
+        var paths = dropped.Where(File.Exists).ToList();
+        if (paths.Count == 0) { _viewModel.ReportStatus("拖进来的不是本机现有的文件，没有发送。"); return; }
+        await _viewModel.SendClipboardFilesAsync(paths);
+    }
+
+    private void ChooseReceiveDirectory_Click(object sender, RoutedEventArgs e)    {
         var dialog = new OpenFolderDialog { Title = "选择收到文件的存放文件夹", Multiselect = false, InitialDirectory = _viewModel.ReceiveDirectory };
         if (dialog.ShowDialog(this) != true) return;
         _ = _viewModel.SetReceiveDirectoryAsync(dialog.FolderName);
     }
+    /// <summary>托盘唤回：藏起来时窗口是 Hide()，这里反过来即可。Topmost 晃一下是为了压过别的窗口抢前台。</summary>
+    private void ShowFromTray()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+        Topmost = true;
+        Topmost = false;
+    }
+
+    private void ExitFromTray()
+    {
+        _exitRequested = true;
+        Close();
+    }
+
+    /// <summary>点关闭到底收托盘还是退出：没定过就问一次，选完记住。返回 false 表示这次关闭作废。</summary>
+    private bool ShouldHideToTray()
+    {
+        if (_closeActionDecided) return _closeHidesToTray;
+        var choice = new CloseChoiceWindow { Owner = this };
+        choice.ShowDialog();
+        if (!choice.Answered) return false;
+        if (choice.Remember)
+        {
+            _closeActionDecided = true;
+            _closeHidesToTray = choice.ChoseTray;
+            _ = SaveCloseActionAsync(choice.ChoseTray);
+        }
+        return choice.ChoseTray;
+    }
+
+    private async Task SaveCloseActionAsync(bool hideToTray)
+    {
+        try { await _appSettings.SaveAsync(await _appSettings.LoadAsync() with { CloseActionDecided = true, MinimizeToTrayOnClose = hideToTray }); }
+        catch (Exception ex) { _ = AppLogger.ErrorAsync("Close action could not be saved", ex); }
+    }
+
     private void OnClosing(object? sender, CancelEventArgs e)
     {
+        if (!_exitRequested && ShouldHideToTray())
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+        _tray?.Dispose();
+        _tray = null;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         _ = AppLogger.ShutdownAsync("Closing entered", stopwatch.ElapsedMilliseconds);
         try { _viewModel.RequestShutdown(); _ = AppLogger.ShutdownAsync("cancel background tasks / close identify windows", stopwatch.ElapsedMilliseconds); }
@@ -75,6 +153,7 @@ public partial class MainWindow : Window
             // 只在配对码真的显示时才走这一秒一次的倒计时，码一过期就自动停下。
             if (_viewModel.IsPairingCodeShown) _pairingTick.Start(); else _pairingTick.Stop();
         }
+        if (e.PropertyName == nameof(MainViewModel.HasTransferStatus) && _viewModel.HasTransferStatus) _transferTick.Start();
         if (e.PropertyName != nameof(MainViewModel.CurrentStatusText)) return;
         var version = ++_statusVersion;
         var status = _viewModel.CurrentStatusText;
@@ -88,16 +167,17 @@ public partial class MainWindow : Window
     }
     private void ProfileName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 2 && sender is FrameworkElement element && element.DataContext is ProfileViewModel profile)
-        { profile.BeginRenameCommand.Execute(null); e.Handled = true; }
+        if (e.ClickCount != 2 || sender is not FrameworkElement element || element.DataContext is not ProfileViewModel profile) return;
+        ShowProfileEditor(profile);
+        e.Handled = true;
     }
-    private void ProfileNameEditor_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private void ShowProfileEditor(ProfileViewModel profile)
     {
-        if (sender is not TextBox editor || editor.DataContext is not ProfileViewModel profile) return;
-        if (e.Key == Key.Enter) { profile.CommitRenameCommand.Execute(null); e.Handled = true; }
-        else if (e.Key == Key.Escape) { profile.CancelRenameCommand.Execute(null); e.Handled = true; }
+        var editor = new ProfileEditViewModel(profile.Profile, _viewModel.Monitors);
+        if (editor.Rows.Count == 0) { MessageBox.Show(this, "没有可以通过 DDC/CI 控制输入源的显示器。", "无法编辑", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        if (new ProfileEditWindow { Owner = this, DataContext = editor }.ShowDialog() != true) return;
+        _ = _viewModel.SaveProfileAsync(editor.Build());
     }
-    private void ProfileNameEditor_LostFocus(object sender, RoutedEventArgs e) { if (sender is TextBox editor && editor.DataContext is ProfileViewModel profile && Mouse.LeftButton != MouseButtonState.Pressed) profile.CommitRenameCommand.Execute(null); }
     private void LocalName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ClickCount == 2) { _viewModel.BeginRenameLocalNameCommand.Execute(null); e.Handled = true; }
@@ -128,12 +208,14 @@ public partial class MainWindow : Window
     private void InputModeNameEditor_LostFocus(object sender, RoutedEventArgs e) { if (sender is TextBox editor && editor.DataContext is InputModeViewModel mode && Mouse.LeftButton != MouseButtonState.Pressed) mode.CommitRenameCommand.Execute(null); }
     private void MonitorName_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 2 && sender is FrameworkElement element)
+        if (e.ClickCount != 2 || sender is not FrameworkElement element || element.DataContext is not MonitorViewModel monitor)
         {
-            var property = element.DataContext?.GetType().GetProperty("BeginRenameCommand");
-            (property?.GetValue(element.DataContext) as System.Windows.Input.ICommand)?.Execute(null);
-            e.Handled = true;
+            if (e.ClickCount == 1) _monitorTitleDoubleClick = false;
+            return;
         }
+        _monitorTitleDoubleClick = true;
+        monitor.BeginRenameCommand.Execute(null);
+        e.Handled = true;
     }
     private void MonitorNameEditor_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
@@ -143,6 +225,7 @@ public partial class MainWindow : Window
     }
     private void MonitorNameEditor_LostFocus(object sender, RoutedEventArgs e)
     {
+        _monitorTitleDoubleClick = false;
         if (sender is TextBox editor && editor.DataContext is MonitorViewModel monitor && Mouse.LeftButton != MouseButtonState.Pressed)
             monitor.CommitRenameCommand.Execute(null);
     }
@@ -150,20 +233,6 @@ public partial class MainWindow : Window
     {
         if (sender is FrameworkElement element && element.DataContext is not null)
             new InputLearningWindow { Owner = this, DataContext = element.DataContext }.ShowDialog();
-    }
-    private void ProfileEdit_Click(object sender, RoutedEventArgs e)
-    {
-        if (ResolveProfile(sender) is not { } profile) return;
-        var editor = new ProfileEditViewModel(profile.Profile, _viewModel.Monitors);
-        if (editor.Rows.Count == 0) { MessageBox.Show(this, "没有可以通过 DDC/CI 控制输入源的显示器。", "无法编辑", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
-        if (new ProfileEditWindow { Owner = this, DataContext = editor }.ShowDialog() != true) return;
-        _ = _viewModel.SaveProfileAsync(editor.Build());
-    }
-    private static ProfileViewModel? ResolveProfile(object? sender)
-    {
-        // 菜单项的 DataContext 继承不可靠，一律从 PlacementTarget 拿卡片上真正绑定的那个对象。
-        if (sender is not MenuItem item) return null;
-        return (item.Parent as ContextMenu)?.PlacementTarget is FrameworkElement target ? target.DataContext as ProfileViewModel : null;
     }
     private void ExternalMonitorFilter(object sender, FilterEventArgs e)
     {
@@ -178,6 +247,8 @@ public partial class MainWindow : Window
     }
     private void MonitorTitle_PreviewMouseMove(object sender, MouseEventArgs e)
     {
+        // 双击改名时手指一定会抖几像素，不拦的话拖拽排序会把这一下抢走，名字框就永远弹不出来。
+        if (_monitorTitleDoubleClick) return;
         if (e.LeftButton != MouseButtonState.Pressed || sender is not FrameworkElement element || element.DataContext is not MonitorViewModel monitor) return;
         if (_draggedMonitor is null) { _draggedMonitor = monitor; _monitorDragStart = e.GetPosition(this); }
         var point = e.GetPosition(this);

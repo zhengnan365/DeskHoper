@@ -5,7 +5,7 @@ namespace MonitorSwitch.Services;
 public sealed class StartupService
 {
     private const string RunKey = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-    private const string ValueName = "MonitorSwitch";
+    private const string ValueName = "DeskHoper";
     public bool IsEnabled => ReadCommand() is not null;
     public bool SetEnabled(bool enabled, string? executablePath = null)
     {

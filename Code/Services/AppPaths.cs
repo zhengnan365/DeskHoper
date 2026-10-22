@@ -4,7 +4,7 @@ namespace MonitorSwitch.Services;
 
 public static class AppPaths
 {
-    public static string ConfigDirectory => Path.Combine(AppContext.BaseDirectory, "MonitorSwitcher-config");
+    public static string ConfigDirectory => Path.Combine(AppContext.BaseDirectory, "DeskHoper-config");
     public static string LogsDirectory => Path.Combine(ConfigDirectory, "logs");
     public static string ProfilesFile => Path.Combine(ConfigDirectory, "profiles.json");
     public static string MonitorsFile => Path.Combine(ConfigDirectory, "monitors.json");

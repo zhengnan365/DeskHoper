@@ -11,4 +11,4 @@ logs/
 *.tmp
 *.corrupt
 .codex/
-MonitorSwitcher-config/
+DeskHoper-config/

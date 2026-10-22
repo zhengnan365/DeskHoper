@@ -18,30 +18,38 @@ public sealed class InputForwarder : IDisposable
     private const uint LlmhfInjected = 0x00000001;
     private const uint WmQuit = 0x0012;
 
-    private readonly Action<KeyboardInput> _sendKeyboard;
-    private readonly Action<MouseInput> _sendMouse;
+    private readonly Func<KeyboardInput, Task> _sendKeyboard;
+    private readonly Func<MouseInput, Task> _sendMouse;
     private readonly Action _escapePressed;
+    private readonly Func<bool> _shareKeyboard;
+    private readonly Func<bool> _shareMouse;
     private readonly Channel<KeyboardInput> _keys = Channel.CreateUnbounded<KeyboardInput>();
     private readonly Channel<MouseInput> _mouse = Channel.CreateUnbounded<MouseInput>();
     private readonly UserInput.HookProc _keyboardProc;
     private readonly UserInput.HookProc _mouseProc;
+    private readonly UserInput.WndProc _rawProc;
+    private const int RawBufferBytes = 512;
+    private nint _rawWindow;
+    private nint _rawBuffer;
     private readonly CancellationTokenSource _cancellation = new();
     private nint _keyboardHook;
     private nint _mouseHook;
     private uint _win32ThreadId;
     private int _started;
-    private int _lastX;
-    private int _lastY;
-    private bool _hasLastPosition;
 
-    public InputForwarder(Action<KeyboardInput> sendKeyboard, Action<MouseInput> sendMouse, Action escapePressed)
+    /// 发送委托要 await 回来：不等待的话泵会跑到网络前面，把帧堆在队列里，
+    /// 一旦有次抖动就变成"攒一批再放出去"的橡皮筋手感。同时最多一帧在飞。
+    public InputForwarder(Func<KeyboardInput, Task> sendKeyboard, Func<MouseInput, Task> sendMouse, Action escapePressed, Func<bool> shareKeyboard, Func<bool> shareMouse)
     {
         _sendKeyboard = sendKeyboard;
         _sendMouse = sendMouse;
         _escapePressed = escapePressed;
+        _shareKeyboard = shareKeyboard;
+        _shareMouse = shareMouse;
         // 委托必须被字段持有：非托管回调进来时托管侧要是已经把它 GC 掉，进程直接崩在回调里。
         _keyboardProc = KeyboardCallback;
         _mouseProc = MouseCallback;
+        _rawProc = RawWindowProc;
     }
 
     public bool IsRunning => Volatile.Read(ref _started) == 1;
@@ -49,7 +57,7 @@ public sealed class InputForwarder : IDisposable
     public void Start()
     {
         if (Interlocked.Exchange(ref _started, 1) == 1) return;
-        var thread = new Thread(Run) { IsBackground = true, Name = "MonitorSwitch.InputForwarder" };
+        var thread = new Thread(Run) { IsBackground = true, Name = "DeskHoper.InputForwarder" };
         thread.Start();
     }
 
@@ -57,6 +65,8 @@ public sealed class InputForwarder : IDisposable
     {
         _win32ThreadId = GetCurrentThreadId();
         var instance = UserInput.GetModuleHandle(null);
+        _rawBuffer = Marshal.AllocHGlobal(RawBufferBytes);
+        StartRawMouse(instance);
         _keyboardHook = UserInput.SetWindowsHookEx(UserInput.WhKeyboardLl, _keyboardProc, instance, 0);
         _mouseHook = UserInput.SetWindowsHookEx(UserInput.WhMouseLl, _mouseProc, instance, 0);
         if (_keyboardHook == nint.Zero && _mouseHook == nint.Zero)
@@ -66,7 +76,7 @@ public sealed class InputForwarder : IDisposable
             return;
         }
         _ = PumpChannelsAsync(_cancellation.Token);
-        // 低级钩子的回调是在装它的那个线程上派发的，所以这个线程必须有消息循环。
+        // 低级钩子的回调是在装它的那个线程上派发的，所以这个线程必须有消息循环。WM_INPUT 也走同一个循环。
         while (GetMessage(out var message, nint.Zero, 0, 0) > 0)
         {
             TranslateMessage(ref message);
@@ -75,7 +85,65 @@ public sealed class InputForwarder : IDisposable
         if (_keyboardHook != nint.Zero) UserInput.UnhookWindowsHookEx(_keyboardHook);
         if (_mouseHook != nint.Zero) UserInput.UnhookWindowsHookEx(_mouseHook);
         _keyboardHook = _mouseHook = nint.Zero;
+        if (_rawWindow != nint.Zero) UserInput.DestroyWindow(_rawWindow);
+        _rawWindow = nint.Zero;
+        if (_rawBuffer != nint.Zero) Marshal.FreeHGlobal(_rawBuffer);
+        _rawBuffer = nint.Zero;
         Volatile.Write(ref _started, 0);
+    }
+
+    /// 鼠标位移改由原始输入提供。注册到一块消息窗口上，RIDEV_INPUTSINK 保证程序在后台也收得到。
+    private void StartRawMouse(nint instance)
+    {
+        var className = "DeskHoper.RawInput";
+        var classEx = new UserInput.WndClassEx
+        {
+            cbSize = (uint)Marshal.SizeOf<UserInput.WndClassEx>(),
+            lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_rawProc),
+            hInstance = instance,
+            lpszClassName = className,
+        };
+        if (UserInput.RegisterClassEx(ref classEx) == 0 && Marshal.GetLastWin32Error() != 141)   // 141 = 类已注册过
+        {
+            _ = AppLogger.ErrorAsync("Raw input window class could not be registered", new InvalidOperationException($"RegisterClassEx 失败，错误码 {Marshal.GetLastWin32Error()}。"));
+            return;
+        }
+        _rawWindow = UserInput.CreateWindowEx(0, className, null, 0, 0, 0, 0, 0, UserInput.HwndMessage, nint.Zero, instance, nint.Zero);
+        if (_rawWindow == nint.Zero)
+        {
+            _ = AppLogger.ErrorAsync("Raw input window could not be created", new InvalidOperationException($"CreateWindowEx 失败，错误码 {Marshal.GetLastWin32Error()}。"));
+            return;
+        }
+        var device = new UserInput.RawInputDevice
+        {
+            usagePage = UserInput.UsagePageGeneric,
+            usage = UserInput.UsageMouse,
+            flags = UserInput.RidevInputsink,
+            window = _rawWindow,
+        };
+        if (!UserInput.RegisterRawInputDevices([device], 1, (uint)Marshal.SizeOf<UserInput.RawInputDevice>()))
+            _ = AppLogger.ErrorAsync("Raw mouse could not be registered", new InvalidOperationException($"RegisterRawInputDevices 失败，错误码 {Marshal.GetLastWin32Error()}。"));
+    }
+
+    private nint RawWindowProc(nint hwnd, uint message, nint wParam, nint lParam)
+        => message == UserInput.WmInput ? ReadRawMouse(lParam) : UserInput.DefWindowProc(hwnd, message, wParam, lParam);
+
+    private nint ReadRawMouse(nint header)
+    {
+        uint size = 0;
+        if (UserInput.GetRawInputData(header, UserInput.RidInput, nint.Zero, ref size, UserInput.RawInputHeaderSize) == 0xFFFFFFFF) return 0;
+        // 比预想的大就当没看见：平板、触摸板、摇杆的载荷结构不一样，硬解析会读到别的东西上去。
+        if (size == 0 || size > RawBufferBytes) return 0;
+        if (UserInput.GetRawInputData(header, UserInput.RidInput, _rawBuffer, ref size, UserInput.RawInputHeaderSize) == 0xFFFFFFFF) return 0;
+        if (Marshal.ReadInt32(_rawBuffer, 0) != 0) return 0;   // RAWINPUTHEADER.type，0 才是鼠标
+        // 本机注入出去的移动同样会变成原始输入。两台实例同机跑、或者哪台两边都开了转发时，
+        // 不认这个标记就会把自己发的再发一遍，光标直接失控。
+        if (Marshal.ReadIntPtr(_rawBuffer, UserInput.RawMouseExtraInfoOffset) == UserInput.InputEvent.InjectTag) return 0;
+        if (((ushort)Marshal.ReadInt16(_rawBuffer, UserInput.RawMouseFlagsOffset) & UserInput.MouseMoveAbsolute) != 0) return 0;   // 远程桌面/平板给的是绝对坐标，不是设备位移
+        var dx = Marshal.ReadInt32(_rawBuffer, UserInput.RawMouseLastXOffset);
+        var dy = Marshal.ReadInt32(_rawBuffer, UserInput.RawMouseLastYOffset);
+        if ((dx != 0 || dy != 0) && _shareMouse()) _mouse.Writer.TryWrite(new MouseInput(dx, dy, UserInput.MouseEventfMove, 0));
+        return 0;
     }
 
     private Task PumpChannelsAsync(CancellationToken token) => Task.WhenAll(PumpKeysAsync(token), PumpMouseAsync(token));
@@ -85,7 +153,7 @@ public sealed class InputForwarder : IDisposable
         try
         {
             while (await _keys.Reader.WaitToReadAsync(token))
-                while (_keys.Reader.TryRead(out var key)) _sendKeyboard(key);
+                while (_keys.Reader.TryRead(out var key)) await _sendKeyboard(key);
         }
         catch (OperationCanceledException) { }
     }
@@ -102,20 +170,23 @@ public sealed class InputForwarder : IDisposable
                     if (item.EventFlags != UserInput.MouseEventfMove)
                     {
                         // 按下/抬起不能和移动混进同一帧，先把攒下的移动发出去。
-                        if (dx != 0 || dy != 0 || wheel != 0) _sendMouse(new MouseInput(dx, dy, UserInput.MouseEventfMove | (wheel != 0 ? UserInput.MouseEventfWheel : 0), wheel));
+                        if (dx != 0 || dy != 0 || wheel != 0) await SendMouseFrameAsync(dx, dy, wheel);
                         dx = dy = wheel = 0;
-                        _sendMouse(item);
+                        await _sendMouse(item);
                         continue;
                     }
                     dx += item.DeltaX;
                     dy += item.DeltaY;
                     wheel += item.WheelDelta;
                 }
-                if (dx != 0 || dy != 0 || wheel != 0) _sendMouse(new MouseInput(dx, dy, UserInput.MouseEventfMove | (wheel != 0 ? UserInput.MouseEventfWheel : 0), wheel));
+                if (dx != 0 || dy != 0 || wheel != 0) await SendMouseFrameAsync(dx, dy, wheel);
             }
         }
         catch (OperationCanceledException) { }
     }
+
+    private Task SendMouseFrameAsync(int dx, int dy, int wheel)
+        => _sendMouse(new MouseInput(dx, dy, UserInput.MouseEventfMove | (wheel != 0 ? UserInput.MouseEventfWheel : 0), wheel));
 
     private nint KeyboardCallback(int code, nint wParam, nint lParam)
     {
@@ -130,6 +201,8 @@ public sealed class InputForwarder : IDisposable
             return UserInput.CallNextHookEx(_keyboardHook, code, wParam, lParam);
         }
         if (!isDown && !isUp) return UserInput.CallNextHookEx(_keyboardHook, code, wParam, lParam);
+        // 没勾"共享键盘"就完全不碰键盘：既不转发也不屏蔽，本机照常打字。
+        if (!_shareKeyboard()) return UserInput.CallNextHookEx(_keyboardHook, code, wParam, lParam);
         _keys.Writer.TryWrite(new KeyboardInput(isDown, (data.flags & UserInput.LlwkhfExtended) != 0, (ushort)data.vkCode, (ushort)data.scanCode));
         return 1;
     }
@@ -140,20 +213,14 @@ public sealed class InputForwarder : IDisposable
         var data = Marshal.PtrToStructure<MouseHookData>(lParam);
         // 被控端注入回来的输入钩子同样看得见。同机跑两个实例时不认这个标记就会无限回环。
         if ((data.flags & LlmhfInjected) != 0) return UserInput.CallNextHookEx(_mouseHook, code, wParam, lParam);
+        // 和键盘同理：没勾"共享鼠标"就不拦也不发。
+        if (!_shareMouse()) return UserInput.CallNextHookEx(_mouseHook, code, wParam, lParam);
         var message = (int)wParam;
         switch (message)
         {
             case UserInput.WmMouseMove:
-            {
-                // 钩子给的是绝对坐标，对端要的是相对位移，不然两端分辨率一不同光标就飞了。
-                var dx = _hasLastPosition ? data.ptX - _lastX : 0;
-                var dy = _hasLastPosition ? data.ptY - _lastY : 0;
-                _lastX = data.ptX;
-                _lastY = data.ptY;
-                _hasLastPosition = true;
-                if (dx != 0 || dy != 0) _mouse.Writer.TryWrite(new MouseInput(dx, dy, UserInput.MouseEventfMove, 0));
+                // 只负责把本机的移动吞掉，让控制端光标停在原地；真正的位移由原始输入给。
                 return 1;
-            }
             case UserInput.WmMouseWheel:
                 _mouse.Writer.TryWrite(new MouseInput(0, 0, UserInput.MouseEventfWheel, unchecked((short)((data.mouseData >> 16) & 0xFFFF))));
                 return 1;

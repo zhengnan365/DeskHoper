@@ -20,21 +20,30 @@ internal sealed class FileReceiveContext : IDisposable
 {
     private readonly string _directory;
     private readonly List<FileOfferFile> _files;
+    private readonly long _total;
     private FileStream? _stream;
     private string? _partPath;
     private string? _finalPath;
     private long _remaining;
+    private long _received;
     private int _index;
 
     public FileReceiveContext(FileOffer offer, string directory)
     {
         _directory = directory;
         _files = offer.Files.ToList();
+        _total = offer.TotalBytes;
         Directory.CreateDirectory(directory);
         OpenNext();
     }
 
     public IReadOnlyList<string> ReceivedPaths { get; private set; } = [];
+
+    /// 整批传输的完成度，界面上的接收进度就取这个。声明总长<=0 的走不到这里（发送端已经拦掉）。
+    public int Percent => _total <= 0 ? 100 : (int)Math.Min(100, _received * 100 / _total);
+    public long TotalBytes => _total;
+    /// 实际落盘的字节数，不是对面声明的总量：对面少发了也不会在界面上虚报"已接收"。
+    public long ReceivedBytes => _received;
 
     private void OpenNext()
     {
@@ -59,6 +68,7 @@ internal sealed class FileReceiveContext : IDisposable
             {
                 _stream.Write(payload, offset, take);
                 _remaining -= take;
+                _received += take;
                 offset += take;
             }
             if (_remaining > 0) continue;

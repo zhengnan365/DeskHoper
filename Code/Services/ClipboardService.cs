@@ -11,7 +11,6 @@ public sealed class ClipboardService : IDisposable
 {
     private readonly HwndSource _source;
     private string? _lastKnownText;
-    private List<string>? _lastKnownFiles;
 
     public ClipboardService(HwndSource source)
     {
@@ -21,7 +20,6 @@ public sealed class ClipboardService : IDisposable
     }
 
     public event Action<string>? LocalTextChanged;
-    public event Action<IReadOnlyList<string>>? LocalFilesChanged;
     public event Action<string>? TextRejected;
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
@@ -34,21 +32,12 @@ public sealed class ClipboardService : IDisposable
     public void CaptureBaseline()
     {
         _lastKnownText = ReadText();
-        _lastKnownFiles = ReadFiles();
     }
 
     public void HandleClipboardUpdate()
     {
-        var files = ReadFiles();
-        if (files is not null)
-        {
-            if (_lastKnownFiles is not null && files.SequenceEqual(_lastKnownFiles)) return;
-            _lastKnownFiles = files;
-            _lastKnownText = null;
-            LocalFilesChanged?.Invoke(files);
-            return;
-        }
-
+        // 只跟文本：本机复制文件不再自动发给对面，那会让"自己拷个文件"变成一次误发。
+        // 对面传来的文件仍然会写进本机剪贴板，所以过去之后能直接粘。
         var text = ReadText();
         if (!ClipboardSyncPolicy.HasChanged(text, _lastKnownText)) return;
         _lastKnownText = text;
@@ -63,7 +52,6 @@ public sealed class ClipboardService : IDisposable
     public void ApplyRemoteText(string text)
     {
         _lastKnownText = text;
-        _lastKnownFiles = null;
         if (!ClipboardSyncPolicy.HasChanged(ReadText(), text))
         {
             _ = AppLogger.InfoAsync($"Clipboard from peer already present, skipped write ({text.Length} chars)");
@@ -74,10 +62,7 @@ public sealed class ClipboardService : IDisposable
 
     public void ApplyRemoteFiles(IReadOnlyList<string> paths)
     {
-        _lastKnownFiles = paths.ToList();
         _lastKnownText = null;
-        var current = ReadFiles();
-        if (current is not null && current.SequenceEqual(_lastKnownFiles)) return;
         var collection = new StringCollection();
         collection.AddRange(paths.ToArray());
         SetWithRetry(() => Clipboard.SetFileDropList(collection), "写入剪贴板文件列表失败");
@@ -112,22 +97,6 @@ public sealed class ClipboardService : IDisposable
         catch (Exception ex)
         {
             _ = AppLogger.ErrorAsync("读取剪贴板失败", ex);
-            return null;
-        }
-    }
-
-    /// 只把真实存在的普通文件当文件列表；目录第一版不传（递归语义容易和用户的预期不一致）。
-    private static List<string>? ReadFiles()
-    {
-        try
-        {
-            if (!Clipboard.ContainsFileDropList()) return null;
-            var collected = Clipboard.GetFileDropList().Cast<string>().Where(File.Exists).ToList();
-            return collected.Count > 0 ? collected : null;
-        }
-        catch (Exception ex)
-        {
-            _ = AppLogger.ErrorAsync("读取剪贴板文件列表失败", ex);
             return null;
         }
     }

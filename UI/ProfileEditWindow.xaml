@@ -7,7 +7,7 @@
       <TextBlock Text="按钮名称" Style="{StaticResource BodyText}" VerticalAlignment="Center"/>
       <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InlineRenameTextBox}" Height="34"/>
     </Grid>
-    <TextBlock Text="每台显示器切到哪个输入源" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+    <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="每台显示器切到哪个输入源" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/><Button Grid.Column="1" Content="读取当前输入源" Command="{Binding UseCurrentInputsCommand}" Style="{StaticResource CompactButton}" Height="30"/></Grid>
     <ItemsControl ItemsSource="{Binding Rows}" Margin="0,0,0,18">
       <ItemsControl.ItemTemplate><DataTemplate>
         <Grid Margin="0,0,0,8">
@@ -23,8 +23,8 @@
       <ComboBox Grid.Column="1" ItemsSource="{Binding ProjectionOptions}" SelectedItem="{Binding SelectedProjection}" DisplayMemberPath="Label" Height="32" VerticalContentAlignment="Center"/>
     </Grid>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-      <Button Content="取消" IsCancel="True" Style="{StaticResource CompactButton}" Margin="0,0,8,0"/>
-      <Button Content="保存" x:Name="SaveButton" IsDefault="True" Style="{StaticResource ProfileActionButton}" Width="88" Click="Save_Click" IsEnabled="{Binding CanSave}"/>
+      <Button Content="取消" IsCancel="True" Style="{StaticResource CompactButton}" Width="88" Height="36" Margin="0,0,8,0"/>
+      <Button Content="保存" x:Name="SaveButton" IsDefault="True" Style="{StaticResource CompactButton}" Width="88" Height="36" FontWeight="SemiBold" Click="Save_Click" IsEnabled="{Binding CanSave}"/>
     </StackPanel>
   </StackPanel>
 </Window>

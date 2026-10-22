@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using MonitorSwitch.Models;
 using MonitorSwitch.Services;
@@ -103,8 +104,8 @@ Assert(ClipboardSyncPolicy.HasChanged("abc", "ab") && !ClipboardSyncPolicy.HasCh
 Assert(!ClipboardSyncPolicy.IsTooLong(new string('x', ClipboardSyncPolicy.MaxTextLength)) && ClipboardSyncPolicy.IsTooLong(new string('x', ClipboardSyncPolicy.MaxTextLength + 1)), "剪贴板大小上限的边界判断必须准确");
 // ---------- 共享链路：同机回环真配对 ----------
 const int peerPort = 47899;
-const string peerSubjectA = "MonitorSwitcher Test A";
-const string peerSubjectB = "MonitorSwitcher Test B";
+const string peerSubjectA = "DeskHoper Test A";
+const string peerSubjectB = "DeskHoper Test B";
 var peerFileA = Path.Combine(Path.GetTempPath(), $"peer-a-{Guid.NewGuid():N}.json");
 var peerFileB = Path.Combine(Path.GetTempPath(), $"peer-b-{Guid.NewGuid():N}.json");
 var peerSettingsA = new PeerSettingsService(peerFileA);
@@ -187,8 +188,8 @@ var xferSettingsA = new PeerSettingsService(xferFileA);
 var xferSettingsB = new PeerSettingsService(xferFileB);
 await xferSettingsA.SaveSettingsAsync(new PeerSettings { LocalName = "发送方", Port = peerPort + 10 });
 await xferSettingsB.SaveSettingsAsync(new PeerSettings { LocalName = "接收方", Port = peerPort + 11 });
-const string xferSubjectA = "MonitorSwitcher Xfer A";
-const string xferSubjectB = "MonitorSwitcher Xfer B";
+const string xferSubjectA = "DeskHoper Xfer A";
+const string xferSubjectB = "DeskHoper Xfer B";
 PeerIdentity.Remove(xferSubjectA);
 PeerIdentity.Remove(xferSubjectB);
 var xferA = new PeerLink(xferSettingsA, PeerIdentity.LoadOrCreate(xferSubjectA));
@@ -200,14 +201,30 @@ var willAccept = false;
 xferB.OfferHandler = offer => { seenOffers.Add(offer); return Task.FromResult(willAccept); };
 var landedFiles = new TaskCompletionSource<IReadOnlyList<string>>();
 xferB.FilesReceived += paths => landedFiles.TrySetResult(paths);
+var sendStates = new List<string>();
+xferA.SendProgress += text => sendStates.Add(text);
 Assert(!await xferA.SendFilesAsync([xferTextPath]), "对端拒绝时发送必须返回失败");
+Assert(sendStates.SequenceEqual(["等待对端接收…"]), "被拒绝的传输只能报出等待接收，不能报任何发送百分比");
 Assert(seenOffers.Count == 1 && seenOffers[0].Files.Single().Name == "小文件 报告.txt" && seenOffers[0].TotalBytes == new FileInfo(xferTextPath).Length, "接收方必须看到原始文件名和总大小");
 Assert(!Directory.Exists(xferB.ReceiveDirectory) || Directory.GetFiles(xferB.ReceiveDirectory).Length == 0, "被拒绝的传输不能在接收目录留下任何文件");
 willAccept = true;
+sendStates.Clear();
+var receiveStates = new List<string>();
+xferB.ReceiveProgress += text => receiveStates.Add(text);
 Assert(await xferA.SendFilesAsync([xferTextPath, xferBigPath]), "同意后两个文件都必须传完");
+Assert(sendStates[0] == "等待对端接收…", "同意后仍要先报等待接收，界面才知道还没开始传字节");
+var percents = sendStates.Where(state => state.StartsWith("发送中 "))
+    .Select(state => int.Parse(state["发送中 ".Length..].TrimEnd('%'))).ToList();
+Assert(percents.Count > 0 && percents[0] == 0 && percents[^1] == 100, "进度必须从 0% 一路报到 100%");
+Assert(percents.Zip(percents.Skip(1), (from, to) => to >= from).All(monotonic => monotonic), "跨文件累加字节数时百分比不能倒退");
 var xferLanded = await landedFiles.Task.WaitAsync(TimeSpan.FromSeconds(15));
 Assert(xferLanded.Count == 2 && File.ReadAllText(xferLanded[0]) == "中文内容 hello", "小文件内容必须逐字一致");
 Assert(new FileInfo(xferLanded[1]).Length == xferPayload.Length && File.ReadAllBytes(xferLanded[1]).AsSpan().SequenceEqual(xferPayload), "跨多个数据块的大文件必须逐字节一致");
+var receivePercents = receiveStates.Where(state => state.StartsWith("接收中 "))
+    .Select(state => int.Parse(state["接收中 ".Length..].TrimEnd('%'))).ToList();
+Assert(receivePercents.Count > 0 && receivePercents[^1] == 100, "接收端必须报出进度，并且收完时到 100%");
+Assert(receivePercents.Zip(receivePercents.Skip(1), (from, to) => to >= from).All(monotonic => monotonic), "接收百分比不能倒退");
+Assert(receiveStates.Last().StartsWith("已接收 "), "接收完要给一句带总量的终态，不然界面一直停在 100%");
 // ---------- 键鼠转发：帧格式，以及"没放行就绝不能进注入路径" ----------
 var keyboardDown = InputPayload.ReadKeyboard(InputPayload.Write(new KeyboardInput(true, true, 0x7B, 0x1D)));
 Assert(keyboardDown is { IsDown: true, IsExtended: true, VirtualKey: 0x7B, ScanCode: 0x1D }, "键盘帧必须原样往返，扩展键标志不能丢");
@@ -223,14 +240,18 @@ Assert(!injected.Task.Wait(TimeSpan.FromMilliseconds(400)), "对端没放行时�
 xferB.SetAcceptingInput(true);
 Assert(await xferA.SendKeyboardAsync(new KeyboardInput(true, false, 0x42, 0x2E)), "放行后键盘帧写入应该成功");
 Assert((await injected.Task.WaitAsync(TimeSpan.FromSeconds(3))).VirtualKey == 0x42, "放行之后键盘帧必须送到注入回调");
-var armSeen = new TaskCompletionSource<string>();
+var armSeen = new TaskCompletionSource<int>();
 xferB.InputArmRequested += mode => armSeen.TrySetResult(mode);
-await xferA.SendInputArmAsync("共用笔记本的键鼠");
-Assert(await armSeen.Task.WaitAsync(TimeSpan.FromSeconds(3)) == "共用笔记本的键鼠", "接管请求必须带上卡片名字，两台机器靠它对上");
+await xferA.SendInputArmAsync(1);
+Assert(await armSeen.Task.WaitAsync(TimeSpan.FromSeconds(3)) == 1, "接管请求必须带上键鼠模式，两台机器靠它对上");
 var rejectSeen = new TaskCompletionSource<string>();
 xferA.InputRejected += reason => rejectSeen.TrySetResult(reason);
 await xferB.SendInputRejectAsync("两张卡片不是同一张。");
 Assert(await rejectSeen.Task.WaitAsync(TimeSpan.FromSeconds(3)) == "两张卡片不是同一张。", "被拒绝时原因必须原样送回控制端，否则用户只知道按了没反应");
+var modeSeen = new TaskCompletionSource<int>();
+xferB.InputModeChanged += mode => modeSeen.TrySetResult(mode);
+await xferA.SendInputModeAsync(1);
+Assert(await modeSeen.Task.WaitAsync(TimeSpan.FromSeconds(3)) == 1, "一边换键鼠卡片，另一边必须收得到，才能自动配成对、不用两台各点一次");
 var stopped = new TaskCompletionSource();
 xferB.InputStopped += () => stopped.TrySetResult();
 await xferA.SendInputStopAsync();
@@ -242,6 +263,24 @@ PeerIdentity.Remove(xferSubjectA);
 PeerIdentity.Remove(xferSubjectB);
 if (Directory.Exists(xferB.ReceiveDirectory)) Directory.Delete(xferB.ReceiveDirectory, true);
 Directory.Delete(xferDir, true);
+
+// 本机地址和发现层只准走物理网卡：Tailscale、Hyper-V/VMware 那些段对面回不来。
+var segments = PhysicalNetwork.Segments();
+var physicalAddresses = segments.Select(segment => segment.Address.ToString()).ToList();
+Assert(PhysicalNetwork.BestAddress(null) is not { } none || physicalAddresses.Contains(none), "本机地址必须落在物理网卡上");
+foreach (var probeTarget in new[] { "100.91.13.11", "203.0.113.7", "172.29.240.9" })
+{
+    var picked = PhysicalNetwork.BestAddress(probeTarget);
+    Assert(picked is null || physicalAddresses.Contains(picked), $"往 {probeTarget} 探测后仍然只能报物理网卡的地址，不能报虚拟网卡那段");
+}
+foreach (var segment in segments)
+{
+    Assert(PhysicalNetwork.IsOnLocalSegment(segment.Address), $"本机自己的地址 {segment.Address} 必须算同网段");
+    if (segment.Mask?.ToString() == "255.255.255.0")
+        Assert(segment.Broadcast?.ToString().EndsWith(".255") == true, "/24 的子网定向广播必须以 .255 结尾，不然发不到同段设备");
+}
+Assert(!PhysicalNetwork.IsOnLocalSegment(IPAddress.Parse("240.1.2.3")), "保留地址段不可能和物理网卡同网段，落在这里说明掩码算错了");
+Assert(!segments.Any(segment => segment.Address.ToString().StartsWith("169.")), "没拿到 DHCP 的 169.254 临时地址不能报出去");
 if (failures.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, failures));
 Console.WriteLine("Projection mode contract tests passed.");
 Console.WriteLine("Per-monitor profile contract tests passed.");
@@ -250,6 +289,7 @@ Console.WriteLine("Switch button editor contract tests passed.");
 Console.WriteLine("Peer pairing and encrypted link contract tests passed.");
 Console.WriteLine("File transfer and receive-path safety contract tests passed.");
 Console.WriteLine("Keyboard and mouse forwarding gate contract tests passed.");
+Console.WriteLine("Physical-NIC-only address selection contract tests passed.");
 
 void Assert(bool condition, string message) { if (!condition) failures.Add(message); }
 

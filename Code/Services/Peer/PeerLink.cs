@@ -63,13 +63,22 @@ public sealed class PeerLink : IAsyncDisposable
     /// 对端要发文件时由界面决定收不收（后台线程调用，实现自己负责切回 UI 线程）。
     public Func<FileOffer, Task<bool>>? OfferHandler { get; set; }
     public event Action<IReadOnlyList<string>>? FilesReceived;
+    /// 发送端进行中的进度，只报"等待对端接收…"和整数百分比（每个 256KB 块都刷一次太吵）。
+    /// 终态不在这里发，由调用方拿到返回值后自己写，失败原因走 LastError。
+    public event Action<string>? SendProgress;
+    /// 接收端进度，和 SendProgress 对称：等待确认没有文案，一有字节进来就报百分比，收完报总量。
+    public event Action<string>? ReceiveProgress;
+    private int _receivedPercent;
     public event Action<KeyboardInput>? KeyboardReceived;
     public event Action<MouseInput>? MouseReceived;
-    /// 对端请求接管输入，带它选的那张卡片名字。本机决定放不放行。
-    public event Action<string>? InputArmRequested;
-    public event Action<string>? InputAcked;
+    /// 对端请求接管输入，带它选的键鼠模式。本机决定放不放行。
+    public event Action<int>? InputArmRequested;
+    public event Action<int>? InputAcked;
     public event Action<string>? InputRejected;
     public event Action? InputStopped;
+    /// 对端换了键鼠卡片。选"共用本端"会把这台切到"共用远端"，反之亦然，两台就不用各点一次。
+    /// 换模式本身不接管输入：真正开始屏蔽本机键盘仍要点"接管"，并且要对面回一个确认。
+    public event Action<int>? InputModeChanged;
     /// 只有本机确实被选成被控端才置位，配对成功本身不等于能把输入注到这台机器上。
     public bool AcceptingInput { get; private set; }
     public void SetAcceptingInput(bool accepting) => AcceptingInput = accepting;
@@ -134,7 +143,7 @@ public sealed class PeerLink : IAsyncDisposable
         try
         {
             var settings = await _settingsService.LoadAsync();
-            client = new TcpClient();
+            client = new TcpClient { NoDelay = true };   // .NET 默认 Nagle 开着，几十字节的键鼠帧会等上一帧 ACK 才发，手感直接变成拖拽
             using (var timeout = new CancellationTokenSource(ConnectTimeoutMs))
             {
                 await client.ConnectAsync(host, port ?? settings.Port, timeout.Token);
@@ -177,6 +186,7 @@ public sealed class PeerLink : IAsyncDisposable
             catch (OperationCanceledException) { return; }
             catch (ObjectDisposedException) { return; }
             catch (SocketException ex) { LastError = ex.Message; continue; }
+            client.NoDelay = true;   // 接受到的 socket 不会继承监听器的设置，两边都得各自关掉 Nagle
             _ = HandleIncomingAsync(client, cancellationToken);
         }
     }
@@ -351,13 +361,22 @@ public sealed class PeerLink : IAsyncDisposable
                         if (Read<FileOfferPayload>(frame.Value.Payload) is { } offer) _ = HandleFileOfferAsync(session, offer);
                         break;
                     case FrameType.FileChunk:
-                        _incoming?.Write(frame.Value.Payload);
+                        if (_incoming is not { } receiving) break;
+                        receiving.Write(frame.Value.Payload);
+                        // 读循环在后台线程，界面接的是简单属性，WPF 会自己切回 UI 线程。
+                        if (receiving.Percent != _receivedPercent)
+                        {
+                            _receivedPercent = receiving.Percent;
+                            ReceiveProgress?.Invoke($"接收中 {_receivedPercent}%");
+                        }
                         break;
                     case FrameType.FileEnd:
                         if (_incoming is not { } incoming) break;
                         var paths = incoming.Complete();
+                        var receivedBytes = incoming.ReceivedBytes;
                         incoming.Dispose();
                         _incoming = null;
+                        ReceiveProgress?.Invoke($"已接收 {paths.Count} 个文件 · {receivedBytes / 1024.0 / 1024.0:0.##} MB");
                         FilesReceived?.Invoke(paths);
                         break;
                     case FrameType.FileDone:
@@ -365,13 +384,16 @@ public sealed class PeerLink : IAsyncDisposable
                             pending.TrySetResult(verdict.Accepted);
                         break;
                     case FrameType.InputArm:
-                        if (Read<InputHandshakePayload>(frame.Value.Payload) is { Mode: not null } arm) InputArmRequested?.Invoke(arm.Mode);
+                        if (Read<InputSignalPayload>(frame.Value.Payload) is { } arm) InputArmRequested?.Invoke(arm.Mode);
                         break;
                     case FrameType.InputAck:
-                        if (Read<InputHandshakePayload>(frame.Value.Payload) is { Mode: not null } acked) InputAcked?.Invoke(acked.Mode);
+                        if (Read<InputSignalPayload>(frame.Value.Payload) is { } acked) InputAcked?.Invoke(acked.Mode);
                         break;
                     case FrameType.InputReject:
-                        if (Read<InputHandshakePayload>(frame.Value.Payload) is { } rejected) InputRejected?.Invoke(rejected.Reason ?? "对端没有放行输入接管。");
+                        if (Read<InputSignalPayload>(frame.Value.Payload) is { } rejected) InputRejected?.Invoke(rejected.Reason ?? "对端没有放行输入接管。");
+                        break;
+                    case FrameType.InputMode:
+                        if (Read<InputSignalPayload>(frame.Value.Payload) is { } switched) InputModeChanged?.Invoke(switched.Mode);
                         break;
                     case FrameType.InputStop:
                         AcceptingInput = false;
@@ -424,14 +446,13 @@ public sealed class PeerLink : IAsyncDisposable
 
     public Task<bool> SendKeyboardAsync(KeyboardInput input) => SendInputFrameAsync(FrameType.Keyboard, InputPayload.Write(input));
     public Task<bool> SendMouseAsync(MouseInput input) => SendInputFrameAsync(FrameType.Mouse, InputPayload.Write(input));
-    public Task<bool> SendInputArmAsync(string mode) => SendHandshakeAsync(FrameType.InputArm, mode, null);
-    public Task<bool> SendInputAckAsync(string mode) => SendHandshakeAsync(FrameType.InputAck, mode, null);
-    public Task<bool> SendInputRejectAsync(string reason) => SendHandshakeAsync(FrameType.InputReject, null, reason);
+    public Task<bool> SendInputArmAsync(int mode) => SendAsync(FrameType.InputArm, Body(new InputSignalPayload(mode, null)));
+    public Task<bool> SendInputAckAsync(int mode) => SendAsync(FrameType.InputAck, Body(new InputSignalPayload(mode, null)));
+    public Task<bool> SendInputRejectAsync(string reason) => SendAsync(FrameType.InputReject, Body(new InputSignalPayload(0, reason)));
+    public Task<bool> SendInputModeAsync(int mode) => SendAsync(FrameType.InputMode, Body(new InputSignalPayload(mode, null)));
     public Task<bool> SendInputStopAsync() => SendAsync(FrameType.InputStop, EmptyBody);
 
     private Task<bool> SendInputFrameAsync(FrameType type, byte[] body) => SendAsync(type, body);
-
-    private Task<bool> SendHandshakeAsync(FrameType type, string? mode, string? reason) => SendAsync(type, Body(new InputHandshakePayload(mode, reason)));
 
     private Task<bool> SendAsync(FrameType type, byte[] body)
     {
@@ -478,18 +499,29 @@ public sealed class PeerLink : IAsyncDisposable
         {
             var offer = new FileOfferPayload(transferId, files.Select((path, index) => new FileOfferItemPayload(Path.GetFileName(path), sizes[index])).ToList());
             await WriteFrameAsync(session.Stream, FrameType.FileHeader, Body(offer), session.CancellationToken);
+            SendProgress?.Invoke("等待对端接收…");
             // 先等对端点头再传字节：没同意就不该往对方硬盘里写任何东西。
             var finished = await Task.WhenAny(decision.Task, Task.Delay(TimeSpan.FromSeconds(OfferTimeoutSeconds), cancellationToken));
             await AppLogger.InfoAsync($"File offer decision wait finished: gotDecision={finished == decision.Task} accepted={(finished == decision.Task ? decision.Task.Result : false)}");
             if (finished != decision.Task) { LastError = $"等对端确认超过 {OfferTimeoutSeconds} 秒，没有发送。"; return false; }
             if (!decision.Task.Result) { LastError = "对端拒绝了这些文件。"; return false; }
+            var done = 0L;
+            var lastReported = -1;
+            SendProgress?.Invoke("发送中 0%");
             foreach (var path in files)
             {
                 await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 var buffer = new byte[MaxChunkBytes];
                 int read;
                 while ((read = await source.ReadAsync(buffer, session.CancellationToken)) > 0)
+                {
                     await WriteFrameAsync(session.Stream, FrameType.FileChunk, read == buffer.Length ? buffer : buffer[..read], session.CancellationToken);
+                    done += read;
+                    var percent = (int)(done * 100 / total);
+                    if (percent == lastReported) continue;
+                    lastReported = percent;
+                    SendProgress?.Invoke($"发送中 {percent}%");
+                }
             }
             await WriteFrameAsync(session.Stream, FrameType.FileEnd, Body(new FileEndPayload(transferId)), session.CancellationToken);
             await AppLogger.InfoAsync($"Sent {files.Count} files, {total / 1024} KB");
@@ -514,7 +546,11 @@ public sealed class PeerLink : IAsyncDisposable
             }
         }
         catch (Exception ex) { await AppLogger.ErrorAsync("处理文件接收请求失败", ex); }
-        if (accepted) _incoming = new FileReceiveContext(new FileOffer(files), ReceiveDirectory);
+        if (accepted)
+        {
+            _receivedPercent = 0;
+            _incoming = new FileReceiveContext(new FileOffer(files), ReceiveDirectory);
+        }
         await WriteFrameAsync(session.Stream, FrameType.FileDone, Body(new FileDecisionPayload(offer.TransferId, accepted)), session.CancellationToken);
         await AppLogger.InfoAsync($"File offer decision sent to peer: accepted={accepted}");
     }
@@ -565,7 +601,7 @@ public sealed class PeerLink : IAsyncDisposable
     private sealed record ProofPayload(string Signature, string? Code);
     private sealed record RejectPayload(string Reason);
     private sealed record TextPayload(string Text);
-    private sealed record InputHandshakePayload(string? Mode, string? Reason);
+    private sealed record InputSignalPayload(int Mode, string? Reason);
 
     private sealed class PeerSession
     {

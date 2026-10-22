@@ -77,6 +77,9 @@ public sealed class LanDiscovery : IAsyncDisposable
         try { announce = JsonSerializer.Deserialize<LanAnnounce>(packet.Buffer, JsonOptions); }
         catch (JsonException) { return; }
         if (announce is null || announce.Version != ProtocolVersion || announce.Id == _runId) return;
+        // 套接字绑在 0.0.0.0 上，Tailscale 和 Hyper-V 那两段也能收到包；那些地址对面回不来，
+        // 所以只认和我某块物理网卡同网段的来源。
+        if (!PhysicalNetwork.IsOnLocalSegment(packet.RemoteEndPoint.Address)) return;
         if (announce.Kind == "probe") { _ = SendAsync("announce", target: packet.RemoteEndPoint.Address.ToString()); return; }
         if (announce.Kind != "announce") return;
         lock (_peers)
@@ -107,11 +110,28 @@ public sealed class LanDiscovery : IAsyncDisposable
     private async Task SendAsync(string kind, CancellationToken token = default, string? target = null)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(new LanAnnounce(ProtocolVersion, kind, _runId, _localName(), DataPort), JsonOptions);
-        var endpoint = target is null ? new IPEndPoint(IPAddress.Broadcast, _discoveryPort) : new IPEndPoint(IPAddress.Parse(target), _discoveryPort);
-        try { await _socket.SendAsync(payload, endpoint, token); }
-        // 网卡被拔掉、当前没有默认路由都会走到这里。发现层是锦上添花，每 3 秒本来就会重试一次，
-        // 所以这里只吞掉不影响主功能的发送失败，不写日志——网络真断了会变成每 3 秒一条刷屏。
-        catch (Exception ex) when (ex is SocketException or FormatException or ObjectDisposedException) { }
+        if (target is not null)
+        {
+            await SendTo(payload, new IPEndPoint(IPAddress.Parse(target), _discoveryPort), token);
+            return;
+        }
+        // 逐块物理网卡发它自己的子网定向广播。发给 255.255.255.255 时系统只挑一块网卡出去，
+        // 多网卡的机器上就会漏掉另一块网段里的对端。
+        var sent = false;
+        foreach (var segment in PhysicalNetwork.Segments())
+        {
+            if (segment.Broadcast is not { } broadcast) continue;
+            sent |= await SendTo(payload, new IPEndPoint(broadcast, _discoveryPort), token);
+        }
+        if (!sent) await SendTo(payload, new IPEndPoint(IPAddress.Broadcast, _discoveryPort), token);
+    }
+
+    private async Task<bool> SendTo(byte[] payload, IPEndPoint endpoint, CancellationToken token)
+    {
+        try { await _socket.SendAsync(payload, endpoint, token); return true; }
+        // 网卡被拔掉、那个段当前发不出去都会走到这里。发现层是锦上添花，每 3 秒本来就会重试一次，
+        // 所以只吞掉发送失败、不写日志——网络真断了会变成每 3 秒一条刷屏。
+        catch (Exception ex) when (ex is SocketException or FormatException or ObjectDisposedException) { return false; }
     }
 
     public async ValueTask DisposeAsync()

@@ -10,20 +10,23 @@ public sealed record PeerSettings
     public bool AutoAcceptFiles { get; init; }
     /// 留空表示用默认目录。改目录不需要重开程序，PeerLink 会立刻用新值。
     public string? ReceiveDirectory { get; init; }
-    /// 三张键鼠卡片。名字是两台机器之间的约定：两边选同一张，角色互补才允许接管。
-    public List<KeyboardMouseMode> KeyboardMouseModes { get; init; } = [new("各用各的键鼠", InputRole.None), new("共用笔记本的键鼠", InputRole.None), new("共用台式机的键鼠", InputRole.None)];
+    /// 三张键鼠卡片的显示名，可以右键改。卡片代表什么由位置决定，所以改名不会破坏两台机器之间的一致性。
+    public List<string> KeyboardMouseNames { get; init; } = ["各用各的键鼠", "共用本端键鼠", "共用远端键鼠"];
     public int KeyboardMouseActive { get; init; }
+    /// 分开开关：常见需求是只用对面的键盘，鼠标自己那台动。
+    public bool ShareKeyboard { get; init; } = true;
+    public bool ShareMouse { get; init; } = true;
 }
 
-public enum InputRole
+/// 选哪张卡就等于定了本机角色，不需要再单独选一次。
+public enum InputMode
 {
-    None,
-    /// 这台机器把键盘鼠标转出去。
-    Controller,
-    /// 这台机器接受对端注入。
-    Target
+    /// 各用各的，不转发。
+    Off = 0,
+    /// 这台的键盘鼠标同时控制另一台：本机是控制端。
+    LocalControlsPeer = 1,
+    /// 另一台的键盘鼠标控制这台：本机是被控端。
+    PeerControlsLocal = 2
 }
-
-public sealed record KeyboardMouseMode(string Name, InputRole Role);
 
 public sealed record PinnedPeer(string Fingerprint, string Name, DateTimeOffset AddedAt);

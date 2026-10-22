@@ -37,7 +37,50 @@ internal static class UserInput
     internal const uint KeyboardEventfScancode = 0x0008;
     internal const uint KeyboardEventfExtendedKey = 0x0001;
 
+    // 原始输入：直接拿设备位移，不经过任何坐标空间。低级钩子的 pt 是 per-monitor 物理坐标，
+    // GetCursorPos 在 System-DPI 感知进程里是虚拟化坐标，两者相减在副屏上会得到垃圾值。
+    internal const uint WmInput = 0x00FF;
+    internal const uint RidInput = 0x10000003;   // 不是 0x100；RID_HEADER 才是 0x10000005
+    internal const uint RidevInputsink = 0x00000100;
+    internal const nint HwndMessage = -3;
+    internal const ushort GenericAll = 0;
+    internal const ushort UsagePageGeneric = 0x01;
+    internal const ushort UsageMouse = 0x02;
+    internal const int RawInputHeaderSize = 24;      // x64：DWORD+DWORD+ULONG_PTR+ULONG_PTR
+    internal const int RawMouseFlagsOffset = 24;
+    internal const int RawMouseLastXOffset = 36;     // USHORT + 补齐 + ULONG ulButtons + ULONG ulRawButtons
+    internal const int RawMouseLastYOffset = 40;
+    internal const int RawMouseExtraInfoOffset = 44;
+    internal const ushort MouseMoveAbsolute = 0x0001;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RawInputDevice
+    {
+        public ushort usagePage;
+        public ushort usage;
+        public uint flags;
+        public nint window;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WndClassEx
+    {
+        public uint cbSize;
+        public uint style;
+        public IntPtr lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public nint hInstance;
+        public nint hIcon;
+        public nint hCursor;
+        public nint hbrBackground;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? lpszMenuName;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpszClassName;
+        public nint hIconSm;
+    }
+
     internal delegate nint HookProc(int nCode, nint wParam, nint lParam);
+    internal delegate nint WndProc(nint hwnd, uint message, nint wParam, nint lParam);
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern nint SetWindowsHookEx(int idHook, HookProc lpfn, nint hMod, uint dwThreadId);
@@ -59,7 +102,39 @@ internal static class UserInput
     internal static extern short GetAsyncKeyState(int vKey);
 
     [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    internal static extern nint RegisterClassEx(ref WndClassEx classEx);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    internal static extern nint CreateWindowEx(uint exStyle, string className, string? windowName, uint style,
+        int x, int y, int width, int height, nint parent, nint menu, nint instance, nint param);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DestroyWindow(nint hwnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern nint DefWindowProc(nint hwnd, uint message, nint wParam, nint lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RegisterRawInputDevices(RawInputDevice[] devices, uint count, uint size);
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetRawInputData(nint header, uint command, nint data, ref uint size, uint headerSize);
+
+    [DllImport("user32.dll")]
     internal static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Point
+    {
+        public int x;
+        public int y;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct KeyboardLlHookStruct

@@ -20,9 +20,9 @@ public static class AppLogger
             var line = $"{DateTimeOffset.Now:O} [{level}] {message}{(exception is null ? string.Empty : $" | {exception}")}{Environment.NewLine}";
             Debug.Write(line);
             await Gate.WaitAsync();
-            try { Directory.CreateDirectory(DirectoryPath); await File.AppendAllTextAsync(Path.Combine(DirectoryPath, $"monitor-switch-{DateTime.Today:yyyyMMdd}.log"), line); }
+            try { Directory.CreateDirectory(DirectoryPath); await File.AppendAllTextAsync(Path.Combine(DirectoryPath, $"deskhoper-{DateTime.Today:yyyyMMdd}.log"), line); }
             finally { Gate.Release(); }
         }
-        catch { Debug.WriteLine($"[MonitorSwitch logging failed] {message}"); }
+        catch { Debug.WriteLine($"[DeskHoper logging failed] {message}"); }
     }
 }

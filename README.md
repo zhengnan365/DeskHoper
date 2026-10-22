@@ -1,108 +1,136 @@
-# MonitorSwitcher
+# DeskHoper
 
-一个用于 Windows 多显示器环境的轻量显示器输入源切换工具。
+一台台式机 + 一台笔记本，共用同样的显示器、键盘和鼠标。DeskHoper 把这三件事收在一个窗口里：外接屏切给谁看、文件怎么过去、键盘鼠标归谁敲。
 
-MonitorSwitcher 主要用于在台式机和笔记本之间快速切换外接显示器输入源，并集成 Windows 投影控制。
+不需要装服务端，不需要账号，两台机器各跑一个 exe，在同一个局域网里就能用。
 
-## v2.1.1
+![屏幕切换](docs/images/screen-switch.png)
 
-- 场景切换更快：去掉原先写死的 750ms 显示器重连等待，改为等待 Windows 显示拓扑稳定，实测单次切换从 ~1050ms 降到 ~520ms
-- 刷新更快：显示器硬件身份（WMI/EDID）改为跨刷新缓存，第二次及以后刷新不再重复查询
-- 显示器卡片改为逐台增量更新，不再整表重建，刷新时不再闪动
-- 发布包体积 155MB → 140MB（只保留中文资源目录）
-- 发布形态变化：不再是单个 exe，而是 `MonitorSwitcher.exe` + 5 个 WPF 原生 dll，**需要整个文件夹一起使用**（好处是不再往临时目录解压，首次启动更快）
+## 三页界面
 
-## v2.1.0
+顶部三个菜单，三页共用同一个固定尺寸的窗口，切页时高度不会跳。
 
-- Profile 右键支持“保存当前配置”，可将当前外接屏输入组合写回台式机或笔记本场景
-- 当前 Profile 状态高亮与绿色状态点
-- 外接显示器卡片支持 UI 内拖拽排序，不影响 Windows 显示器编号、拓扑或 Profile 关系
-- 输入源学习、每台显示器独立映射与 HDMI 切换
+### 屏幕切换
 
-发布包：`MonitorSwitcher-v2.1.1-win-x64.zip`，self-contained，解压后整个文件夹一起使用，无需单独安装 .NET Runtime。
+通过 DDC/CI 直接改显示器的输入源，不是改 Windows 的分辨率或排列。
 
-## 截图
+- **快速切换**：两张卡片对应两套接线（台式机 / 笔记本），点一下就按每台显示器分别切过去，当前生效的那张会有蓝框和绿点。
+- **投影模式**：仅电脑屏幕 / 复制 / 扩展 / 仅第二屏幕。
+- **显示器控制**：逐台读当前输入源，可单独切 DP / Type-C / HDMI。接线换了就点「学习输入源」重新认一遍；「标识」让屏幕闪编号，方便对上是哪一台。
+- 显示器名字双击可改；卡片名字双击进入「编辑输入源和投影模式」。
 
-![MonitorSwitcher 主界面](docs/monitor-switcher-main.png)
+### 文件共享
 
-## 功能
+![文件共享](docs/images/file-share.png)
 
-- 台式机 / 笔记本一键切换
-- DisplayPort / USB-C / HDMI 输入源切换
-- DDC/CI 显示器控制
-- 输入源学习
-- 每台显示器独立输入映射
-- 显示器自定义名称
-- 显示器标识
-- Windows 投影模式切换：仅电脑屏幕、复制、扩展、仅第二屏幕
-- 全局快捷键：Ctrl + Alt + 1 切换台式机，Ctrl + Alt + 2 切换笔记本
-- Single Instance
-- 自动检测当前输入状态
-- Mixed Input 状态识别
+连上之后，这一页主要就是一块拖放区。
+
+- **剪贴板文本**：复制即同步，不用点任何东西。
+- **传文件**：把文件拖进那块区域才发送。本机自己复制文件不会触发发送——复制文件和本机拷一份在剪贴板层面分不出来，「复制即发」必然误发。
+- 发过去的文件落在你指定的接收目录，同时写进本机剪贴板，可以直接粘进资源管理器。
+- 发送和接收都有进度：等待对端接收 → 发送中 / 接收中百分比 → 带文件数和总量的终态，显示在那块拖放区里，停 8 秒后自己收回。
+- 同名不覆盖，只往接收目录里写。
+
+### 键鼠共享
+
+![键鼠共享](docs/images/keyboard-mouse.png)
+
+三张卡片，选哪张就等于选角色：
+
+| 卡片 | 含义 |
+| --- | --- |
+| 各用各的键鼠 | 不拦截、不转发，两边互不影响 |
+| 共用本端键鼠 | 这台当控制端，敲的键和滑的鼠标送到对面 |
+| 共用远端键鼠 | 这台被控，接收对面的键鼠 |
+
+在一台换卡片，对面会自动镜像成互补的那张，不用两台各点一次。键盘和鼠标是两个独立勾选，可以只共享鼠标。`Ctrl + Alt + Q` 随时交回。
+
+## 配对
+
+![配对](docs/images/pairing.png)
+
+1. 两台都打开 DeskHoper，停在**文件共享**页（局域网发现只在停着的时候收发广播）。
+2. 一台点「生成配对码」，屏幕上显示 6 位数字，5 分钟内有效。
+3. 另一台在「我连接对方」里点它（同网段会自动出现在列表里，点一下就填好地址），或者手填名称或 IP，然后输配对码。
+4. 连上后配对这块就收起来了，需要重新配对时断开即可。
+
+## 网络与安全
+
+- **只走物理网卡**。本机地址和发现层的收发都限定在有线、无线这两类网卡上：Tailscale、Hyper-V、VMware 这类虚拟网卡各自编了一个内网段，对面拿那个地址回不来，所以既不会被当成本机地址显示，也不会出现在设备列表里。
+- **不经任何第三方服务器**。没有云端中转、没有账号，数据只在两台机器之间直连。
+- 传输是 TCP + TLS，用自签证书并 pin SHA-256 指纹；配对码是首次信任（TOFU）的一环，所以发现列表被伪造最多是多出一条假设备，连过去仍然必须输对码。
+- 端口：**TCP 47810**（数据）、**UDP 47811**（局域网发现）。首次监听会弹 Windows 防火墙授权，**两台都要放行专用网络**，否则发现列表是空的、手填 IP 也连不上。
+- 局域网发现用 UDP 广播，**不能跨网段**。两台不在同一个网段时，先确认网络拓扑，或者用有路由的网卡段。
+- 限制：一次最多 200 个文件、总量 512 MB。
+
+## 其他
+
+- **托盘**：点关闭会让你选「隐藏到托盘」还是「退出程序」，可以记住。隐藏到托盘时窗口只是收起来，剪贴板同步、文件共享、键鼠转发和全局热键全部照常工作；退出才是真的全停。托盘图标单击唤回，右键菜单里有切换台式机 / 切换笔记本 / 打开主界面 / 退出。
+- **单实例**：已经在跑（包括藏在托盘里）时再双击 exe，会把那个实例的窗口唤回前台，不会开出第二个。
+- **快捷键**：`Ctrl + Alt + 1` 切台式机，`Ctrl + Alt + 2` 切笔记本，`Ctrl + Alt + Q` 交回键鼠。
+- 关掉程序 = 所有共享能力立即停止，没有后台服务，也没有开机自启。
 
 ## 系统要求
 
-- Windows 10 / Windows 11
-- x64
-- 支持 DDC/CI 的外接显示器
-- 显示器 OSD 中已开启 DDC/CI
+- Windows 10 / 11，x64
+- 支持 DDC/CI 的外接显示器，并且**显示器 OSD 菜单里已开启 DDC/CI**
+- 文件共享和键鼠共享需要两台机器在同一个局域网内
 
-软件使用 .NET 8 WPF 开发。GitHub Release 提供 self-contained win-x64 版本，正常情况下无需单独安装 .NET Runtime。发布包内除 `MonitorSwitcher.exe` 外还有 5 个 WPF 原生 dll（`wpfgfx_cor3.dll`、`PresentationNative_cor3.dll`、`D3DCompiler_47_cor3.dll`、`PenImc_cor3.dll`、`vcruntime140_cor3.dll`），请与 exe 放在同一目录，不要单独移动 exe。
-
-## 使用方法
-
-1. 启动 MonitorSwitcher。
-2. 点击“刷新”检测当前显示器。
-3. 第一次使用时，通过“学习输入源”分别确认每台显示器的 DP、Type-C 和 HDMI 映射。
-4. 设置完成后即可通过主界面或快捷键快速切换。
+软件用 .NET 8 WPF 开发，GitHub Release 提供 self-contained win-x64 版本，正常情况下不需要单独安装 .NET Runtime。
 
 ## 输入源学习
 
-不同品牌和型号的显示器可能使用不同的 DDC/CI Input Select（VCP 0x60）值。MonitorSwitcher 不要求所有显示器使用固定输入值，学习结果会按每台显示器独立保存，用户学习值优先于已知默认映射。
-
-## Windows 投影
-
-MonitorSwitcher 可以调用 Windows Projection：
-
-- 仅电脑屏幕
-- 复制
-- 扩展
-- 仅第二屏幕
-
-实际状态通过 Windows DisplayConfig 进行验证。
+不同品牌型号的显示器，DDC/CI 的 Input Select（VCP 0x60）取值并不一样。DeskHoper 不要求所有显示器用同一套值：学习结果**按每台显示器独立保存**，你学出来的值优先于内置的默认映射。当前主要在 AOC 显示器环境下开发和测试，实际支持情况取决于显示器型号、连接方式、显卡驱动和固件。
 
 ## 配置文件
 
-用户配置保存在 EXE 所在目录的 `MonitorSwitcher-config` 文件夹，主要包括：
+配置保存在 exe 旁边的 `DeskHoper-config` 目录里：
 
-- `monitors.json`
-- `profiles.json`
-- `logs`
+| 文件 | 内容 |
+| --- | --- |
+| `profiles.json` | 切换场景（每台显示器的输入源 + 投影模式） |
+| `monitors.json` | 每台显示器的输入映射、自定义名称、排序 |
+| `settings.json` | 输入源默认映射、关闭时的行为等应用设置 |
+| `peer.json` | 本机名称、配对码指纹、接收目录、键鼠模式 |
+| `logs/` | 运行日志 `deskhoper-YYYYMMDD.log` |
 
-删除对应配置文件可以恢复相应配置。配置文件不包含在源码仓库和发布包之外的项目文件中。
+删掉对应文件即可恢复该项配置。
 
-## 支持的显示器
-
-MonitorSwitcher 理论上适用于支持标准 DDC/CI Input Select VCP 的显示器，当前主要在 AOC 显示器环境下开发和测试。实际支持情况取决于显示器型号、连接方式、显卡驱动和显示器固件。
-
-## Build
-
-开发环境：.NET 8、WPF、Windows x64。
+## 构建
 
 ```powershell
 dotnet build MonitorSwitch.sln
 dotnet build MonitorSwitch.sln -c Release
-dotnet publish MonitorSwitch.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+dotnet publish MonitorSwitch.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish\v2.2.0-win-x64
 ```
 
-发布结果在 `publish\<rid>\` 下：`MonitorSwitcher.exe` + 5 个原生 dll，打包整个目录（配置目录 `MonitorSwitcher-config` 由程序首次运行时在 exe 旁创建，不要打进发布包）。
+发布结果是 `DeskHoper.exe` + 5 个 WPF 原生 dll，**整个文件夹一起拷走**（不再往临时目录解压，首次启动更快）。self-contained，目标机不需要装 .NET Runtime。配置目录 `DeskHoper-config` 由程序首次运行时在 exe 旁边创建，不要打进发布包。
 
-多语言资源裁剪（只保留 `zh-Hans`，省 14MB）已写在 `MonitorSwitch.csproj` 的 `<SatelliteResourceLanguages>` 里，无需在命令行重复指定。
+多语言资源只保留 `zh-Hans`（写在 csproj 的 `<SatelliteResourceLanguages>` 里，不用命令行重复指定），省 14MB。
+
+回归测试是独立的控制台工程，不依赖测试框架：
+
+```powershell
+dotnet run --project MonitorSwitch.Tests/MonitorSwitch.Tests.csproj -c Debug
+```
+
+8 组契约测试：投影模式、逐台 Profile、显示器偏好与输入源学习、切换按钮编辑、配对与加密链路、文件传输与接收路径安全、键鼠转发闸门、只走物理网卡的地址选择。
+
+## 已知限制
+
+- UAC 提权弹窗和以管理员身份运行的窗口，普通权限进程注入不进去，这时键鼠转发会失效（页面上能看到）。
+- 键鼠转发用的是硬件位移，对面若开着「提高指针精确度」，手感会带一条非线性曲线。
+- 输入源刚切完的一瞬间，DDC 可能读到瞬时值而显示「未知输入源」，过一会儿会自己校正。
+- 显示器如果本身不响应 DDC/CI，只能读不能切，卡片上会标「DDC不可用」。
 
 ## License
 
 本项目采用 [MIT License](LICENSE) 开源。
 
-## Disclaimer
+## 免责说明
 
-使用前请确认显示器已开启 DDC/CI。DDC/CI 读写失败时，软件会保留错误状态；请以显示器 OSD 和 Windows 显示设置为准。
+使用前请确认显示器已开启 DDC/CI。DDC/CI 读写失败时软件会保留错误状态而不会猜测结果；实际输入源请以显示器 OSD 和 Windows 显示设置为准。键鼠转发会拦截本机输入，请用 `Ctrl + Alt + Q` 交回，不要在被控端处于重要操作时开启。
+
+---
+
+郑在探索 · zhengnan.me@gmail.com · [www.znup.top](https://www.znup.top)

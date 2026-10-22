@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Net.Sockets;
 using MonitorSwitch.Models;
 using MonitorSwitch.Services;
@@ -94,17 +95,26 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private PeerLink EnsureLink()
     {
         if (_peerLink is not null) return _peerLink;
-        _peerLink = new PeerLink(_peerSettingsService, PeerIdentity.LoadOrCreate($"MonitorSwitcher Peer {Environment.MachineName}"));
+        _peerLink = new PeerLink(_peerSettingsService, PeerIdentity.LoadOrCreate($"DeskHoper Peer {Environment.MachineName}"));
         _peerLink.StateChanged += OnPeerStateChanged;
         _peerLink.TextReceived += text => RemoteClipboardTextHandler?.Invoke(text);
-        _peerLink.FilesReceived += paths => RemoteClipboardFilesHandler?.Invoke(paths);
         _peerLink.OfferHandler = offer => PeerOfferHandler is { } handler ? handler(offer) : Task.FromResult(false);
         _peerLink.InputArmRequested += mode => _ = HandleInputArmAsync(mode);
         _peerLink.InputAcked += mode => StartForwarding(mode);
         _peerLink.InputRejected += reason => { StopForwarding(); InputErrorText = reason; };
         _peerLink.InputStopped += () => { StopForwarding(); IsReceivingInput = false; };
-        _peerLink.KeyboardReceived += key => InputReceiver.Apply(key);
-        _peerLink.MouseReceived += mouse => InputReceiver.Apply(mouse);
+        _peerLink.InputModeChanged += mode => OnPeerInputModeChanged(mode);
+        // 进行中的进度不能带超时，不然传到一半文案就没了；每来一条新的先把到期时间清掉。
+        _peerLink.SendProgress += text => { _transferStatusUntil = default; SendProgressText = text; };
+        _peerLink.ReceiveProgress += text => { _transferStatusUntil = default; ReceiveProgressText = text; };
+        // 收完的终态走这里：ReceiveProgress 刚报完"已接收…"，紧跟着就是这个，顺序不能反。
+        _peerLink.FilesReceived += paths =>
+        {
+            _transferStatusUntil = DateTime.Now + TransferStatusHold;
+            RemoteClipboardFilesHandler?.Invoke(paths);
+        };
+        _peerLink.KeyboardReceived += key => RecordInjected(InputReceiver.Apply(key));
+        _peerLink.MouseReceived += mouse => RecordInjected(InputReceiver.Apply(mouse));
         return _peerLink;
     }
 
@@ -112,19 +122,29 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         var link = _peerLink;
         if (link is null || !link.IsConnected) return;
-        if (await link.SendFilesAsync(paths)) Status = $"已发送 {paths.Count} 个文件到对端";
-        else Status = link.LastError ?? "文件发送失败";
+        if (await link.SendFilesAsync(paths))
+        {
+            var megabytes = paths.Where(File.Exists).Sum(path => new FileInfo(path).Length) / 1024.0 / 1024.0;
+            SendProgressText = $"发送成功，{paths.Count} 个文件 · {megabytes:0.##} MB";
+        }
+        else SendProgressText = link.LastError ?? "文件发送失败";
+        Status = SendProgressText;
+        _transferStatusUntil = DateTime.Now + TransferStatusHold;
     }
+
 
     private void OnPeerStateChanged()
     {
         OnPropertyChanged(nameof(IsPeerConnected));
-        OnPropertyChanged(nameof(PeerStatusText));
+        RaisePeerStatus();
         OnPropertyChanged(nameof(LocalPairingCode));
         OnPropertyChanged(nameof(IsPairingCodeShown));
         // 链路一断必须立刻交回：钩子还挂着而发不出去的话，用户面对的就是一台敲不动的电脑。
         if (_peerLink?.IsConnected != true) { StopForwarding(); IsReceivingInput = false; }
-        if (_peerLink?.IsConnected == true) PeerConnected?.Invoke();
+        if (_peerLink?.IsConnected != true) return;
+        // 链路刚建立就补一次：模式是"共用本端"的话不用人再去点一下。
+        _ = RequestInputArmAsync();
+        PeerConnected?.Invoke();
     }
 
     public void ReportStatus(string message) => Status = message;
@@ -138,6 +158,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private string _receiveDirectory = AppPaths.ReceivedFilesDirectory;
     private string _pairingCountdownText = string.Empty;
     private string _localIpAddress = string.Empty;
+    private string? _sendProgressText;
+    private string? _receiveProgressText;
     /// 当前显示哪一页：屏幕切换 / 文件共享 / 键鼠共享。
     public AppSection ActiveSection { get => _activeSection; private set => SetProperty(ref _activeSection, value); }
     public AsyncRelayCommand SelectSectionCommand { get; private set; } = null!;
@@ -166,17 +188,85 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
     /// 对端要往哪台机器上连，所以这一页得把本机 IP 显示出来。第一次进这一页时才查，不占启动时间。
     public string LocalIpAddressText { get => _localIpAddress; private set => SetProperty(ref _localIpAddress, value); }
+
+    /// 拖放区在传输进行中显示的文案；null 表示没在传，文案回到"把文件拖到这里"。
+    /// 发和收共用同一块显示位，所以谁开始传就把另一个的清掉，不然旧的"发送成功"会盖住新的"接收中"。
+    public string? SendProgressText
+    {
+        get => _sendProgressText;
+        private set
+        {
+            if (value is not null) ClearReceive();
+            if (SetProperty(ref _sendProgressText, value)) RaiseTransferStatus();
+        }
+    }
+    public bool IsSendingFiles => !string.IsNullOrEmpty(_sendProgressText);
+
+    /// 对面发过来的东西正在落盘时的文案，显示在同一块拖放区里。
+    public string? ReceiveProgressText
+    {
+        get => _receiveProgressText;
+        private set
+        {
+            if (value is not null) ClearSend();
+            if (SetProperty(ref _receiveProgressText, value)) RaiseTransferStatus();
+        }
+    }
+    public bool IsReceivingFiles => !string.IsNullOrEmpty(_receiveProgressText);
+
+    private void RaiseTransferStatus()
+    {
+        OnPropertyChanged(nameof(IsSendingFiles));
+        OnPropertyChanged(nameof(IsReceivingFiles));
+        OnPropertyChanged(nameof(HasTransferStatus));
+    }
+
+    private void ClearSend()
+    {
+        if (_sendProgressText is null) return;
+        _sendProgressText = null;
+        RaiseTransferStatus();
+    }
+
+    private void ClearReceive()
+    {
+        if (_receiveProgressText is null) return;
+        _receiveProgressText = null;
+        RaiseTransferStatus();
+    }
+
+    /// <summary>
+    /// 传输结果文案的停留时间。进行中的百分比不受它约束，只有终态（发送成功 / 已接收 / 失败）会自己收回去。
+    /// </summary>
+    private static readonly TimeSpan TransferStatusHold = TimeSpan.FromSeconds(8);
+    private DateTime _transferStatusUntil;
+
+    public bool HasTransferStatus => IsSendingFiles || IsReceivingFiles;
+
+    /// 由界面上那个 1 秒 tick 驱动：到点了就把终态收回去，拖放区恢复成提示文案。
+    public void RefreshTransferStatus()
+    {
+        if (_transferStatusUntil == default || DateTime.Now < _transferStatusUntil) return;
+        ClearTransferStatus();
+    }
+
+    /// 下一次拖进来时把上一次的终态清掉，拖放区回到"把文件拖到这里"。
+    public void ClearTransferStatus()
+    {
+        _transferStatusUntil = default;
+        ClearSend();
+        ClearReceive();
+    }
+    /// 每次进共享页都重读一遍：换网络、DHCP 续租之后，屏幕上留着旧地址只会把人带偏。
     private void EnsureLocalIpAddressDetected()
     {
-        if (_localIpAddress.Length > 0) return;
-        try
-        {
-            LocalIpAddressText = System.Net.Dns.GetHostAddresses(System.Net.Dns.GetHostName())
-                .Where(address => address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && !System.Net.IPAddress.IsLoopback(address))
-                .Select(address => address.ToString()).FirstOrDefault() ?? "未识别，请手动查本机 IP";
-        }
-        catch (Exception ex) { LocalIpAddressText = "未识别，请手动查本机 IP"; _ = AppLogger.ErrorAsync("Local IPv4 detection failed", ex); }
+        // 手填过对端就用对端，其次用发现到的第一台设备——只有"到它的路由"能说明该报哪个段的地址
+        var probeTarget = !string.IsNullOrWhiteSpace(_peerHost) ? _peerHost.Trim()
+            : _discoveredPeers.Count > 0 ? _discoveredPeers[0].Address : null;
+        var detected = PhysicalNetwork.BestAddress(probeTarget) ?? "未识别，请手动查本机 IP";
+        if (!string.Equals(_localIpAddress, detected, StringComparison.Ordinal)) LocalIpAddressText = detected;
     }
+
     public string ReceiveDirectory { get => _receiveDirectory; private set => SetProperty(ref _receiveDirectory, value); }
     public bool IsReceiveDirectoryCustom => !string.Equals(_receiveDirectory, AppPaths.ReceivedFilesDirectory, StringComparison.OrdinalIgnoreCase);
 
@@ -216,11 +306,27 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string PeerStatusText => _peerLink switch
     {
         null => "共享未启用",
-        _ when _peerLink.State == PeerLinkState.Connected => $"已连接：{_peerLink.RemoteName}",
-        _ when LocalPairingCode is { } code => $"等待配对，配对码 {code}",
+        _ when _peerLink.State == PeerLinkState.Connected => $"已连接 {_peerLink.RemoteName}",
+        _ when LocalPairingCode is not null => "等待配对",
         _ when _peerLink.State == PeerLinkState.Connecting => "正在连接对端…",
-        _ when _peerLink.State == PeerLinkState.Failed => $"上次连接失败：{_peerLink.LastError ?? "未知原因"}",
+        _ when _peerLink.State == PeerLinkState.Failed => "连接失败",
         _ => "未配对"
+    };
+
+    /// 状态行只放短句，细节挂在这上面。配对码在「对方连接我」那行已经大字显示，这里不重复占宽。
+    /// 状态行和它的 ToolTip 是同一份判断的两个视图，必须一起通知，不能只刷一个。
+    private void RaisePeerStatus()
+    {
+        OnPropertyChanged(nameof(PeerStatusText));
+        OnPropertyChanged(nameof(PeerStatusDetail));
+    }
+
+    public string PeerStatusDetail => _peerLink switch
+    {
+        null => "共享未启用：还没生成过配对码，也没连过对端。",
+        _ when LocalPairingCode is { } code => $"配对码 {code}，5 分钟内有效。",
+        _ when _peerLink.State == PeerLinkState.Failed => _peerLink.LastError ?? "未知原因",
+        _ => PeerStatusText
     };
 
     /// 界面每秒调一次：刷新倒计时。配对码一过期，页面上的码自己收回去。
@@ -230,7 +336,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         PairingCountdownText = left is null ? string.Empty : $"剩 {(int)left.Value.TotalMinutes}:{left.Value.Seconds:00} 有效";
         OnPropertyChanged(nameof(LocalPairingCode));
         OnPropertyChanged(nameof(IsPairingCodeShown));
-        OnPropertyChanged(nameof(PeerStatusText));
+        RaisePeerStatus();
     }
 
     /// 没有配对过就既不建证书也不监听端口，避免第一次启动就悄悄往用户证书存储里写东西。
@@ -244,7 +350,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         ReceiveDirectory = PeerLink.ResolveReceiveDirectory(settings.ReceiveDirectory);
         OnPropertyChanged(nameof(IsReceiveDirectoryCustom));
         if (string.IsNullOrEmpty(_peerHost)) PeerHost = settings.LastPeerHost ?? string.Empty;
+        _shareKeyboard = settings.ShareKeyboard;
+        _shareMouse = settings.ShareMouse;
+        OnPropertyChanged(nameof(ShareKeyboard));
+        OnPropertyChanged(nameof(ShareMouse));
         LoadInputModes(settings);
+        RefreshInputStats();
     }
 
     public async Task StartPeerIfNeededAsync()
@@ -252,7 +363,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         var settings = await _peerSettingsService.LoadAsync();
         if (settings.PinnedPeers.Count == 0) return;
         await EnsureLink().StartAsync();
-        OnPropertyChanged(nameof(PeerStatusText));
+        RaisePeerStatus();
     }
 
     private LanDiscovery? _discovery;
@@ -298,8 +409,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string InputStatusText { get => _inputStatusText; private set => SetProperty(ref _inputStatusText, value); }
     public string? InputErrorText { get => _inputErrorText; private set { if (SetProperty(ref _inputErrorText, value)) OnPropertyChanged(nameof(ShowInputError)); } }
     public bool ShowInputError => !string.IsNullOrEmpty(_inputErrorText);
-    public AsyncRelayCommand SelectInputModeCommand { get; private set; } = null!;
-    public AsyncRelayCommand TakeOverInputCommand { get; private set; } = null!;
     public AsyncRelayCommand ReleaseInputCommand { get; private set; } = null!;
 
     private void RefreshInputStatus()
@@ -308,76 +417,93 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             (true, _) => "已接管：这台的键盘鼠标正转给对端，按 Ctrl + Alt + Q 交回。",
             (false, true) => "已交出：对端正在用它的键盘鼠标操作这台。",
-            (false, false) => _activeInputMode is null or { Index: 0 } ? "各用各的键鼠。" : $"{_activeInputMode.Name}：还没接管。"
+            _ => _activeInputMode?.Mode switch
+            {
+                InputMode.LocalControlsPeer => "共用本端键鼠：链路一连上就自动接管。",
+                InputMode.PeerControlsLocal => "共用远端键鼠：等对面开始。",
+                _ => "各用各的键鼠。"
+            }
         };
-        OnPropertyChanged(nameof(IsForwarding));
     }
 
     private void WireInputCommands()
     {
-        SelectInputModeCommand = new AsyncRelayCommand(parameter => parameter is InputModeViewModel mode ? SelectInputModeAsync(mode) : Task.CompletedTask);
-        TakeOverInputCommand = new AsyncRelayCommand(TakeOverInputAsync);
         ReleaseInputCommand = new AsyncRelayCommand(ReleaseInputAsync);
     }
 
-    private async Task SelectInputModeAsync(InputModeViewModel mode)
+    /// 卡片本身就是单选按钮，选中状态由界面写进来。
+    private void OnInputModeSelected(InputModeViewModel mode) => _ = ApplyInputModeAsync(mode.Index, announce: true);
+
+    private async Task ApplyInputModeAsync(int index, bool announce)
     {
-        if (_activeInputMode == mode) return;
+        if (_activeInputMode?.Index == index) return;
+        var target = _inputModes.FirstOrDefault(candidate => candidate.Index == index);
+        if (target is null) return;
         // 换卡片必须先交回，否则上一张卡片的钩子还挂在机器上。
         await ReleaseInputAsync();
-        foreach (var candidate in _inputModes) candidate.IsSelected = candidate == mode;
-        _activeInputMode = mode;
+        // 先定当前再刷 IsSelected：IsSelected 会回调进这个方法，先定下来就不会递归。
+        _activeInputMode = target;
+        foreach (var candidate in _inputModes) candidate.IsSelected = ReferenceEquals(candidate, target);
         RefreshInputStatus();
         await SaveInputModesAsync();
+        if (_peerLink is { IsConnected: true } link)
+        {
+            if (announce) await link.SendInputModeAsync(index);
+            if (index == (int)InputMode.LocalControlsPeer) await RequestInputArmAsync();
+        }
     }
 
-    private async Task TakeOverInputAsync()
+    /// 选完卡片就自动开始转发，不用再点一次：两台机器都是同一个人，中间那步确认只会变成麻烦。
+    /// 链路连上时也会自动补一次，所以这个模式设好之后每次开机都直接生效。
+    private async Task RequestInputArmAsync()
     {
-        InputErrorText = null;
         var link = _peerLink;
-        if (link is null || !link.IsConnected) { InputErrorText = "还没连上对端，先去文件共享页连接。"; return; }
-        var mode = _activeInputMode;
-        if (mode is null || mode.Role != InputRole.Controller) { InputErrorText = "这张卡片要把本机选成控制端才能接管。"; return; }
-        if (!await link.SendInputArmAsync(mode.Name)) { InputErrorText = "请求发不出去，链路可能已经断了。"; return; }
-        InputStatusText = $"已请求接管「{mode.Name}」，等对端确认…";
+        if (link is null || !link.IsConnected) return;
+        if (_activeInputMode?.Mode != InputMode.LocalControlsPeer || _isForwarding) return;
+        InputErrorText = null;
+        if (!await link.SendInputArmAsync((int)InputMode.LocalControlsPeer)) InputErrorText = "接管请求发不出去，链路可能已经断了。";
     }
 
-    private async Task HandleInputArmAsync(string requested)
+    /// 对面选"共用本端"，这台自动切到"共用远端"，反过来也一样。对面不用再点一次。
+    /// 但自动切的只是卡片，不是接管：真正开始屏蔽键盘仍要对面点"接管"并拿到这台确认。
+    private void OnPeerInputModeChanged(int peerIndex) => _ = ApplyInputModeAsync(peerIndex switch
+    {
+        (int)InputMode.LocalControlsPeer => (int)InputMode.PeerControlsLocal,
+        (int)InputMode.PeerControlsLocal => (int)InputMode.LocalControlsPeer,
+        _ => (int)InputMode.Off
+    }, announce: false);
+
+    private async Task HandleInputArmAsync(int requested)
     {
         var link = _peerLink;
         if (link is null) return;
-        var mode = _activeInputMode;
-        if (mode is null || !string.Equals(mode.Name, requested, StringComparison.Ordinal))
+        if (_activeInputMode?.Mode != InputMode.PeerControlsLocal)
         {
-            var reason = mode is null ? "本机还没选键鼠卡片。" : $"本机选的是「{mode.Name}」，和对端选的「{requested}」不是同一张。";
-            InputErrorText = reason;
-            await link.SendInputRejectAsync(reason);
-            return;
-        }
-        if (mode.Role != InputRole.Target)
-        {
-            InputErrorText = "这张卡片把本机选成了控制端，不能再接收对端的输入。";
+            InputErrorText = "这台没选「共用远端键鼠」，不能接收对端的键盘鼠标。";
             await link.SendInputRejectAsync(InputErrorText);
             return;
         }
         link.SetAcceptingInput(true);
         IsReceivingInput = true;
-        await link.SendInputAckAsync(mode.Name);
-        await AppLogger.InfoAsync($"Accepting injected input for mode {mode.Name}");
+        await link.SendInputAckAsync(requested);
+        await AppLogger.InfoAsync("Accepting injected input from the peer");
     }
 
-    private void StartForwarding(string mode)
+    private void StartForwarding(int mode)
     {
         if (_forwarder is not null) return;
         var link = _peerLink;
         if (link is null) return;
+        ResetInputStats();
         _forwarder = new InputForwarder(
-            key => _ = link.SendKeyboardAsync(key),
-            mouse => _ = link.SendMouseAsync(mouse),
-            () => _ = ReleaseInputAsync());
+            async key => { Interlocked.Increment(ref _framesSent); _lastInputActivity = DateTimeOffset.Now; await link.SendKeyboardAsync(key); },
+            async mouse => { Interlocked.Increment(ref _framesSent); _lastInputActivity = DateTimeOffset.Now; await link.SendMouseAsync(mouse); },
+            () => _ = ReleaseInputAsync(),
+            () => _shareKeyboard,
+            () => _shareMouse);
         _forwarder.Start();
         IsForwarding = true;
-        _ = AppLogger.InfoAsync($"Input forwarding armed for mode {mode}");
+        _ = AppLogger.InfoAsync($"Input forwarding armed, mode {mode}");
     }
 
     private void StopForwarding()
@@ -396,7 +522,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (link is { AcceptingInput: true })
         {
             link.SetAcceptingInput(false);
-            IsReceivingInput = false;
             await link.SendInputStopAsync();
         }
         IsReceivingInput = false;
@@ -406,25 +531,72 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private async Task SaveInputModesAsync()
     {
         var settings = await _peerSettingsService.LoadAsync();
-        var modes = _inputModes.Select(mode => new KeyboardMouseMode(mode.Name, mode.Role)).ToList();
+        var names = _inputModes.Select(mode => mode.Name).ToList();
         var active = _activeInputMode?.Index ?? 0;
-        if (settings.KeyboardMouseActive == active && settings.KeyboardMouseModes.Zip(modes).All(pair => pair.First == pair.Second)) return;
-        await _peerSettingsService.SaveSettingsAsync(settings with { KeyboardMouseModes = modes, KeyboardMouseActive = active });
+        if (settings.KeyboardMouseActive == active && settings.KeyboardMouseNames.SequenceEqual(names)) return;
+        await _peerSettingsService.SaveSettingsAsync(settings with { KeyboardMouseNames = names, KeyboardMouseActive = active });
     }
 
     private void LoadInputModes(PeerSettings settings)
     {
         _inputModes.Clear();
-        var modes = settings.KeyboardMouseModes.Count == 3 ? settings.KeyboardMouseModes : [new KeyboardMouseMode("各用各的键鼠", InputRole.None), new KeyboardMouseMode("共用笔记本的键鼠", InputRole.None), new KeyboardMouseMode("共用台式机的键鼠", InputRole.None)];
-        for (var index = 0; index < modes.Count; index++)
-        {
-            var mode = new InputModeViewModel(modes[index].Name, index == 0 ? InputRole.None : modes[index].Role, index, changed => { _ = SaveInputModesAsync(); });
-            _inputModes.Add(mode);
-        }
-        var active = Math.Clamp(settings.KeyboardMouseActive, 0, _inputModes.Count - 1);
-        _activeInputMode = _inputModes[active];
-        _activeInputMode.IsSelected = true;
+        var names = settings.KeyboardMouseNames.Count == 3 ? settings.KeyboardMouseNames : ["各用各的键鼠", "共用本端键鼠", "共用远端键鼠"];
+        for (var index = 0; index < names.Count; index++)
+            _inputModes.Add(new InputModeViewModel(names[index], index, renamed => { _ = SaveInputModesAsync(); }, OnInputModeSelected));
+        // 先定住当前卡片再打勾：IsSelected 会回调进换卡片逻辑，先定下来启动时就不会白白交回一次。
+        _activeInputMode = _inputModes[Math.Clamp(settings.KeyboardMouseActive, 0, _inputModes.Count - 1)];
+        foreach (var candidate in _inputModes) candidate.IsSelected = ReferenceEquals(candidate, _activeInputMode);
         RefreshInputStatus();
+    }
+
+    private bool _shareKeyboard = true;
+    private bool _shareMouse = true;
+    private long _framesSent;
+    private long _framesApplied;
+    private long _injectFailures;
+    private DateTimeOffset? _lastInputActivity;
+    private string _inputStatsText = "还没有转发过输入。";
+
+    public bool ShareKeyboard { get => _shareKeyboard; set { if (SetProperty(ref _shareKeyboard, value)) _ = SaveShareFlagsAsync(); } }
+    public bool ShareMouse { get => _shareMouse; set { if (SetProperty(ref _shareMouse, value)) _ = SaveShareFlagsAsync(); } }
+    public string InputStatsText { get => _inputStatsText; private set => SetProperty(ref _inputStatsText, value); }
+
+    private async Task SaveShareFlagsAsync()
+    {
+        var settings = await _peerSettingsService.LoadAsync();
+        if (settings.ShareKeyboard == _shareKeyboard && settings.ShareMouse == _shareMouse) return;
+        await _peerSettingsService.SaveSettingsAsync(settings with { ShareKeyboard = _shareKeyboard, ShareMouse = _shareMouse });
+    }
+
+    /// 界面每秒刷一次。转发中的时候人最需要的就是"到底有没有东西过去"这个数字。
+    public void RefreshInputStats()
+    {
+        var sent = Interlocked.Read(ref _framesSent);
+        var applied = Interlocked.Read(ref _framesApplied);
+        var failed = Interlocked.Read(ref _injectFailures);
+        var devices = $"键盘{(_shareKeyboard ? "开" : "关")} · 鼠标{(_shareMouse ? "开" : "关")}";
+        var last = _lastInputActivity is { } when ? $" · 最近 {when.ToLocalTime():HH:mm:ss}" : string.Empty;
+        InputStatsText = _activeInputMode?.Mode switch
+        {
+            InputMode.LocalControlsPeer => $"这台发出 {sent} 帧 · {devices}{last}",
+            InputMode.PeerControlsLocal => $"这台注入 {applied} 帧 · 失败 {failed} 次 · {devices}{last}",
+            _ => "还没有转发过输入。"
+        };
+    }
+
+    private void RecordInjected(bool succeeded)
+    {
+        Interlocked.Increment(ref succeeded ? ref _framesApplied : ref _injectFailures);
+        _lastInputActivity = DateTimeOffset.Now;
+    }
+
+    private void ResetInputStats()
+    {
+        Interlocked.Exchange(ref _framesSent, 0);
+        Interlocked.Exchange(ref _framesApplied, 0);
+        Interlocked.Exchange(ref _injectFailures, 0);
+        _lastInputActivity = null;
+        RefreshInputStats();
     }
 
     private async Task GeneratePairingCodeAsync()    {
@@ -460,7 +632,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (_peerLink is null) return;
         await _peerLink.DisconnectAsync();
-        OnPropertyChanged(nameof(PeerStatusText));
+        RaisePeerStatus();
     }
 
     public async Task SendClipboardTextAsync(string text)
@@ -552,10 +724,26 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 if (result.InputResults.TryGetValue(monitor.Id, out var input) && input.Succeeded)
                     await monitor.ReadInputCommand.ExecuteAsync();
             profile.LastSwitchResult = result.InputResults.Values.All(x => x.Succeeded) ? "切换成功" : "部分显示器切换失败";
-            UpdateCurrentProfileFromInputs();
+            // 刚切完那一下，显示器常常还在报过渡值，读出来是"未知输入源"，
+            // 拿输入值去反推当前是哪个按钮必然推不出来，选中态就掉了。先按"我刚切到它"标上。
+            CurrentProfile = profile;
             Status = $"已切换到{profile.Name}";
+            _ = RevalidateAfterSwitchAsync();
         }
         finally { IsSwitching = false; }
+    }
+
+    /// 等显示器把新输入源稳定报出来之后再看一眼，顺手把"未知输入源"刷成真实值。
+    private async Task RevalidateAfterSwitchAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), _lifetimeCancellation.Token);
+            foreach (var monitor in Monitors.Where(m => m.IsDdcSupported)) await monitor.ReadInputCommand.ExecuteAsync();
+            UpdateCurrentProfileFromInputs();
+            UpdateSteadyStateStatus();
+        }
+        catch (OperationCanceledException) { }
     }
 
     private Task SwitchDefaultProfileAsync(string id, string legacyName) => Profiles.FirstOrDefault(p => p.Profile.Id == id) is { } profile ? ExecuteProfileAsync(profile) : Profiles.FirstOrDefault(p => p.Name == legacyName) is { } legacy ? ExecuteProfileAsync(legacy) : Task.CompletedTask;
@@ -593,7 +781,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private void UpdateCurrentProfileFromInputs()
     {
         var current = Monitors.Where(m => m.IsDdcSupported).ToDictionary(m => m.StableId, m => m.CurrentInputValue, StringComparer.Ordinal);
-        CurrentProfile = Profiles.FirstOrDefault(profile => ProfileStateMatcher.Matches(profile.Profile, current, _activeMappings));
+        // 一台都读不出输入源时不清空选中态：这时候"没匹配上"只是因为没证据，不是因为真的切到了别的按钮。
+        if (current.Values.Any(value => value is not null))
+            CurrentProfile = Profiles.FirstOrDefault(profile => ProfileStateMatcher.Matches(profile.Profile, current, _activeMappings));
     }
     public bool IsMixedProfileState => false;
     public IReadOnlyList<MonitorIdentificationTarget> IdentificationTargets => Monitors.Select(m => new MonitorIdentificationTarget(m.DisplayNumber, m.StableId, m.DisplayName, m.Bounds)).ToList();

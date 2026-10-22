@@ -1,15 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>MonitorSwitcher</AssemblyName>
-    <Product>MonitorSwitcher</Product>
-    <Title>MonitorSwitcher</Title>
-    <Version>2.1.1</Version>
-    <AssemblyVersion>2.1.1.0</AssemblyVersion>
-    <FileVersion>2.1.1.0</FileVersion>
-    <InformationalVersion>2.1.1</InformationalVersion>
+    <AssemblyName>DeskHoper</AssemblyName>
+    <Product>DeskHoper</Product>
+    <Title>DeskHoper</Title>
+    <Version>2.2.0</Version>
+    <AssemblyVersion>2.2.0.0</AssemblyVersion>
+    <FileVersion>2.2.0.0</FileVersion>
+    <InformationalVersion>2.2.0</InformationalVersion>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- 托盘图标用 WinForms 的 NotifyIcon：自己 P/Invoke Shell_NotifyIcon 要带一块消息窗口和结构体，不值。
+         实测多带 WinForms 程序集，自包含包体积只涨几 MB。 -->
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -20,10 +23,15 @@
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
   <ItemGroup>
+    <!-- 开 WinForms 会顺带把 System.Windows.Forms / System.Drawing 塞成全局 using，
+         和 WPF 的 Point / DragEventArgs / MouseEventArgs 全部撞名。托盘代码自己显式 import，这里把全局的撤掉。 -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Remove="MonitorSwitch.Tests\**\*.cs" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Remove="Code\Services\TrayService.cs" />
     <Page Remove="UI\App.xaml" />
     <ApplicationDefinition Include="UI\App.xaml" />
   </ItemGroup>
