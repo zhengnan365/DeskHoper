@@ -4,10 +4,10 @@
     <AssemblyName>DeskHoper</AssemblyName>
     <Product>DeskHoper</Product>
     <Title>DeskHoper</Title>
-    <Version>2.2.0</Version>
-    <AssemblyVersion>2.2.0.0</AssemblyVersion>
-    <FileVersion>2.2.0.0</FileVersion>
-    <InformationalVersion>2.2.0</InformationalVersion>
+    <Version>2.2.1</Version>
+    <AssemblyVersion>2.2.1.0</AssemblyVersion>
+    <FileVersion>2.2.1.0</FileVersion>
+    <InformationalVersion>2.2.1</InformationalVersion>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <!-- 托盘图标用 WinForms 的 NotifyIcon：自己 P/Invoke Shell_NotifyIcon 要带一块消息窗口和结构体，不值。
