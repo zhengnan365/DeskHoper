@@ -12,3 +12,8 @@ logs/
 *.corrupt
 .codex/
 DeskHoper-config/
+
+# VitePress 站点
+website/node_modules/
+website/.vitepress/dist/
+website/.vitepress/cache/
