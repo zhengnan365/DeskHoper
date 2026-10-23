@@ -6,7 +6,7 @@
 
 ![平台](https://img.shields.io/badge/平台-Windows%2010%20%2F%2011-0078D4) ![运行时](https://img.shields.io/badge/.NET%208-Self--Contained-512BD4) ![许可](https://img.shields.io/badge/许可-MIT-green) [![最新下载](https://img.shields.io/badge/下载-v2.2.0-orange)](https://github.com/zhengnan365/DeskHoper/releases/latest)
 
-![屏幕切换主界面](docs/images/screen-switch.png)
+<img src="docs/images/screen-switch.png" alt="屏幕切换主界面" width="460">
 
 ## 目录
 
@@ -65,7 +65,7 @@
 
 ### 文件共享
 
-![文件共享页](docs/images/file-share.png)
+<img src="docs/images/file-share.png" alt="文件共享页" width="460">
 
 - **共享状态**：显示本机地址和对端连接状态。剪贴板文本复制即同步，不需要点任何东西。
 - **传文件**：把文件拖进页面里的拖放区才发送。本机自己复制文件不会触发发送——复制文件和本机拷一份在剪贴板层面分不出来，「复制即发」必然误发。
@@ -75,7 +75,7 @@
 
 ### 键鼠共享
 
-![键鼠共享页](docs/images/keyboard-mouse.png)
+<img src="docs/images/keyboard-mouse.png" alt="键鼠共享页" width="460">
 
 三张卡片，选哪张就等于选角色：
 
@@ -89,7 +89,7 @@
 
 ## 配对
 
-![配对](docs/images/pairing.png)
+<img src="docs/images/pairing.png" alt="配对区域：生成配对码与我连接对方" width="460">
 
 1. 两台都打开 DeskHoper，停在**文件共享**页（局域网发现只在停着的时候收发广播）。
 2. 一台点「生成配对码」，屏幕显示 6 位数字，5 分钟内有效。
