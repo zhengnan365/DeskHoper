@@ -17,3 +17,7 @@ DeskHoper-config/
 website/node_modules/
 website/.vitepress/dist/
 website/.vitepress/cache/
+
+# 站点与图标生成脚本只留在本地，不进仓库
+website/
+tools/
