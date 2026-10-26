@@ -16,7 +16,9 @@ public sealed class ProfileViewModel : ObservableObject
     public SwitchProfile Profile { get; private set; }
     public string Name => Profile.Name;
     public string DisplayName => Name;
-    public string ConnectionSummary => string.Join(" + ", Profile.Monitors.Where(item => item.InputKind is not null).Select(item => item.InputKind switch { InputSourceKind.DisplayPort => "DP", InputSourceKind.UsbC => "Type-C", InputSourceKind.Hdmi => "HDMI", _ => "未知" }));
+    /// 老配置可能只存了 DDC 数值、没有 InputKind，这时按内置默认映射认，和切换时用的口径一致。
+    public string ConnectionSummary => string.Join(" + ", Profile.Monitors.Select(item => (item.InputKind ?? KindFromInputValue(item.Input)) switch { InputSourceKind.DisplayPort => "DP", InputSourceKind.UsbC => "Type-C", InputSourceKind.Hdmi => "HDMI", _ => "未知" }));
+    private static InputSourceKind? KindFromInputValue(uint input) => input switch { 15 => InputSourceKind.DisplayPort, 16 => InputSourceKind.UsbC, 17 => InputSourceKind.Hdmi, _ => null };
     public string EditableName { get => _editableName; set => SetProperty(ref _editableName, value); }
     public ProjectionMode? ProjectionMode => Profile.ProjectionMode;
     public string ShortcutDisplayText { get; init; } = "未设置";
