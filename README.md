@@ -4,7 +4,7 @@
 
 不需要装服务端，不需要账号。两台机器各跑一个 exe，在同一个局域网里就能用。
 
-![平台](https://img.shields.io/badge/平台-Windows%2010%20%2F%2011-0078D4) ![运行时](https://img.shields.io/badge/.NET%208-Self--Contained-512BD4) ![许可](https://img.shields.io/badge/许可-MIT-green) [![最新下载](https://img.shields.io/badge/下载-v2.2.1-orange)](https://github.com/zhengnan365/DeskHoper/releases/latest)
+![平台](https://img.shields.io/badge/平台-Windows%2010%20%2F%2011-0078D4) ![运行时](https://img.shields.io/badge/.NET%208-Self--Contained-512BD4) ![许可](https://img.shields.io/badge/许可-MIT-green) [![最新下载](https://img.shields.io/badge/下载-v2.2.2-orange)](https://github.com/zhengnan365/DeskHoper/releases/latest)
 
 <img src="docs/images/screen-switch.png" alt="屏幕切换主界面" width="460">
 
