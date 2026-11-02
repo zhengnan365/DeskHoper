@@ -33,22 +33,34 @@ public sealed class DdcCiService : IDdcCiService
         try
         {
             ThrowIfDisposed();
-            if (!_leases.TryGetValue(monitorId, out var lease)) return new DdcOperationResult(false, 0, 0, stopwatch.Elapsed);
-            var lastError = 0;
-            var result = await DdcRetryPolicy.ExecuteAsync(async attempt =>
-            {
-                var nativeResult = await Task.Run(() =>
-                {
-                    var succeeded = Dxva2.SetVCPFeature(lease.Handle, Dxva2.InputSelectVcpCode, inputValue);
-                    return (Succeeded: succeeded, LastError: succeeded ? 0 : Marshal.GetLastWin32Error());
-                }, cancellationToken);
-                lastError = nativeResult.LastError;
-                await AppLogger.InfoAsync($"DDC write monitor={monitorId} vcp=0x60 value={inputValue} attempt={attempt} succeeded={nativeResult.Succeeded} lastError={lastError} elapsedMs={stopwatch.ElapsedMilliseconds}");
-                return nativeResult.Succeeded;
-            }, cancellationToken);
-            return new DdcOperationResult(result.Succeeded, result.Attempts, lastError, stopwatch.Elapsed);
+            var first = await WriteOnceAsync(monitorId, inputValue, stopwatch, cancellationToken);
+            if (first.Succeeded) return first;
+            // 切输入源、改投影模式、显示器休眠唤醒都会让 Windows 重新枚举显示设备，手里的
+            // hPhysicalMonitor 当场作废，句柄表也就查不到这台。不重建就得用户手点"刷新"才切得动。
+            // 直接调 RefreshCore：闸门已经在我们手里，走 RefreshAsync 会自锁。
+            await AppLogger.InfoAsync($"DDC write missed monitor={monitorId} lastError={first.LastError}; rebuilding handles and retrying");
+            RefreshCore(null, cancellationToken);
+            return await WriteOnceAsync(monitorId, inputValue, stopwatch, cancellationToken);
         }
         finally { _operationGate.Release(); }
+    }
+
+    private async Task<DdcOperationResult> WriteOnceAsync(string monitorId, uint inputValue, System.Diagnostics.Stopwatch stopwatch, CancellationToken cancellationToken)
+    {
+        if (!_leases.TryGetValue(monitorId, out var lease)) return new DdcOperationResult(false, 0, 0, stopwatch.Elapsed);
+        var lastError = 0;
+        var result = await DdcRetryPolicy.ExecuteAsync(async attempt =>
+        {
+            var nativeResult = await Task.Run(() =>
+            {
+                var succeeded = Dxva2.SetVCPFeature(lease.Handle, Dxva2.InputSelectVcpCode, inputValue);
+                return (Succeeded: succeeded, LastError: succeeded ? 0 : Marshal.GetLastWin32Error());
+            }, cancellationToken);
+            lastError = nativeResult.LastError;
+            await AppLogger.InfoAsync($"DDC write monitor={monitorId} vcp=0x60 value={inputValue} attempt={attempt} succeeded={nativeResult.Succeeded} lastError={lastError} elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return nativeResult.Succeeded;
+        }, cancellationToken);
+        return new DdcOperationResult(result.Succeeded, result.Attempts, lastError, stopwatch.Elapsed);
     }
 
     private IReadOnlyList<MonitorDevice> RefreshCore(IProgress<MonitorDevice>? progress, CancellationToken cancellationToken)

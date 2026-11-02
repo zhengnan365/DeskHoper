@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _pairingTick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _inputStatsTick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _transferTick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _inputProbeTick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(10) };
     public string DisplayStatusText { get => (string)GetValue(DisplayStatusTextProperty); private set => SetValue(DisplayStatusTextProperty, value); }
     public MainWindow() { InitializeComponent(); _viewModel = new MainViewModel(new MonitorIdentifyPresenter()); DataContext = _viewModel; DisplayStatusText = _viewModel.CurrentStatusText; _viewModel.PropertyChanged += ViewModel_PropertyChanged; Loaded += async (_, _) => { await _viewModel.RefreshAsync(); ConfigureMonitorView(); await _viewModel.StartPeerIfNeededAsync(); await _viewModel.LoadPeerStateAsync(); }; SourceInitialized += OnSourceInitialized; Closing += OnClosing; Loaded += async (_, _) => { var app = await new SettingsService().LoadAsync(); _closeActionDecided = app.CloseActionDecided; _closeHidesToTray = app.MinimizeToTrayOnClose; _tray ??= new TrayService(ShowFromTray, ExitFromTray, () => _viewModel.DesktopSwitchCommand.Execute(null), () => _viewModel.LaptopSwitchCommand.Execute(null)); }; }
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -56,6 +57,10 @@ public partial class MainWindow : Window
         // 只有停在这一页时才刷数字，离开就别白烧定时器。
         _inputStatsTick.Tick += (_, _) => { if (_viewModel.ActiveSection == AppSection.KeyboardMouse) _viewModel.RefreshInputStats(); };
         _inputStatsTick.Start();
+        // 输入源读不出来时自动补读；连续几轮还不行就整表重扫，把 Windows 重新枚举后作废的
+        // DDC 句柄重建回来。健康状态下一跳都不碰 DDC，不会白烧。
+        _inputProbeTick.Tick += (_, _) => _ = _viewModel.AutoRefreshUnknownInputsAsync();
+        _inputProbeTick.Start();
     }
     private bool AskFileOffer(FileOffer offer)
     {

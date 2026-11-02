@@ -733,6 +733,26 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         finally { IsSwitching = false; }
     }
 
+    private int _unknownInputPolls;
+
+    /// 刚切完那一下 DDC 经常短暂读不到值，界面就一直挂着"未知输入源"。这里只在确实有
+    /// 显示器读不出来时才回头补读，健康状态下一律不碰 DDC；连续补读几轮还是读不到，
+    /// 说明句柄表已经被 Windows 的重新枚举搞旧了，就整表重扫一次把它重建回来。
+    public async Task AutoRefreshUnknownInputsAsync()
+    {
+        if (IsSwitching || IsRefreshing) return;
+        var stuck = Monitors.Where(monitor => monitor.IsDdcSupported && monitor.CurrentInputValue is null).ToList();
+        if (stuck.Count == 0) { _unknownInputPolls = 0; return; }
+        if (++_unknownInputPolls >= 6)
+        {
+            _unknownInputPolls = 0;
+            await RefreshAsync();
+            return;
+        }
+        foreach (var monitor in stuck) await monitor.ReadCurrentInputValueAsync();
+        UpdateCurrentProfileFromInputs();
+    }
+
     /// 等显示器把新输入源稳定报出来之后再看一眼，顺手把"未知输入源"刷成真实值。
     private async Task RevalidateAfterSwitchAsync()
     {
