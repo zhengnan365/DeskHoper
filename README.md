@@ -45,12 +45,19 @@
 
 ## 下载与启动
 
-1. 到 [Releases](https://github.com/zhengnan365/DeskHoper/releases/latest) 下载 `DeskHoper-vX.Y.Z-win-x64.zip`。
-2. **整个文件夹解压出来**，不要只拷 `DeskHoper.exe`——旁边有 5 个 WPF 原生 dll 必须一起带上。
-3. 双击 `DeskHoper.exe`。self-contained 包，目标机不需要安装 .NET Runtime。**第一次双击会比以后慢很多**——实测同一份包，首次从启动到首屏就绪约 23 秒，第二次只要 2.2 秒。这 20 秒花在 Windows 首次读取并扫描这个 138 MB 的单文件 exe 上（包体不会解压到临时目录），不是程序卡住，别连点：单实例逻辑会把已经开着的窗口唤回，不会开出第二个。
+[Releases](https://github.com/zhengnan365/DeskHoper/releases/latest) 每个版本发两个包，功能完全一样，区别只在要不要自带 .NET 运行时：
+
+| 包 | 大小 | 前置要求 | 什么时候用 |
+| --- | --- | --- | --- |
+| `DeskHoper-vX.Y.Z-win-x64-slim.zip` | 约 0.35 MB，解压就一个 exe | 机器上要有 .NET 8 **桌面**运行时（x64） | 默认推荐 |
+| `DeskHoper-vX.Y.Z-win-x64.zip` | 58.3 MB，exe 139 MB | 什么都不用装 | 目标机不方便装运行时的兜底 |
+
+1. **先确认有没有运行时**：打开 `C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App`，里面有 `8.` 开头的文件夹就行。这个目录不存在就只有两个选择：装一个运行时，或者直接用大版本包。**只有 8.x 顶用**——程序按 .NET 8 编译，`runtimeconfig.json` 里没开 `rollForward`（默认只在同大版本内滚动），机器上只装了 .NET 9/10 的桌面运行时仍然算缺。
+2. **slim 包**解压后双击 `DeskHoper.exe`。真缺运行时的话，双击不会崩溃，而是弹一个系统提示 `You must install .NET to run this application.`，里面有 `Download it now` 按钮和 `aka.ms` 下载链接，装完再双击就好——这个弹窗是 .NET 自己的装机提示，不是程序报错。
+3. **大版本包必须整个文件夹解压出来**，不要只拷 `DeskHoper.exe`——旁边有 5 个 WPF 原生 dll 要一起带上。**第一次双击会比以后慢很多**：实测同一份从浏览器下载的包，首次从启动到首屏就绪约 23 秒，第二次只要 2.2 秒。这 20 秒花在 Windows 首次读取并扫描这个 139 MB 的单文件 exe 上（包体不会解压到临时目录），不是程序卡住，别连点：单实例逻辑会把已经开着的窗口唤回，不会开出第二个。
 4. 首次监听网络时 Windows 会弹防火墙授权，**两台机器都要勾选「专用网络」**，否则局域网发现列表是空的、手填 IP 也连不上。
 
-程序没有安装步骤，不写注册表，不开机自启，没有后台服务。关掉程序 = 所有共享能力立即停止。
+程序没有安装步骤，不写注册表，不开机自启，没有后台服务。关掉程序 = 所有共享能力立即停止。两个包的启动速度差不多：本机交替实测，从双击到三台显示器全部读出来，slim 1.0–1.1 秒、大版本 1.1–1.2 秒（各 2 轮，差距在噪声里）；大版本不一样的只有从浏览器下载后那**第一次**的二十多秒。所以选哪个只看要不要装运行时、下载多大。
 
 ## 界面与功能
 
@@ -144,6 +151,7 @@
 
 | 现象 | 先看这里 |
 | --- | --- |
+| 双击后弹 `You must install .NET to run this application.` | slim 包的机器上没有 .NET 8 桌面运行时。点弹窗里的 `Download it now` 装一个，或者改用大版本包 |
 | 设备列表一直是空的 | 两台防火墙是否放行「专用网络」；是否都停在文件共享页；是否在同一个网段 |
 | 本机地址看着不对 | 多半是虚拟网卡的段。程序只认物理网卡，仍不对就看日志里 `LAN discovery` 那几行 |
 | 点了切换屏幕没反应 | 在显示器 OSD 菜单里确认 DDC/CI 已开启；卡片上标「DDC不可用」说明这台显示器不响应写入 |
@@ -169,7 +177,7 @@
 - 支持 DDC/CI 的外接显示器，并且**显示器 OSD 菜单里已开启 DDC/CI**
 - 文件共享和键鼠共享需要两台机器在同一个局域网内
 
-软件用 .NET 8 WPF 开发，GitHub Release 提供 self-contained win-x64 包，正常情况下不需要单独安装 .NET Runtime。
+软件用 .NET 8 WPF 开发。GitHub Release 同时提供 slim（框架依赖，要自己装 .NET 8 桌面运行时）和 self-contained 大版本（运行时打进 exe，什么都不用装）两种 win-x64 包，见[下载与启动](#下载与启动)。
 
 ## 输入源学习
 
@@ -181,9 +189,12 @@
 dotnet build DeskHoper.sln
 dotnet build DeskHoper.sln -c Release
 dotnet publish DeskHoper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish\vX.Y.Z-win-x64
+dotnet publish DeskHoper.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish\slim-vX.Y.Z-win-x64
 ```
 
-发布结果是 `DeskHoper.exe` + 5 个 WPF 原生 dll，**整个文件夹一起拷走**（原生 dll 留在 exe 旁边，运行时不再往临时目录解压）。多语言资源只保留 `zh-Hans`（写在 csproj 的 `<SatelliteResourceLanguages>` 里，不用命令行重复指定），省 14 MB。配置目录 `DeskHoper-config` 由程序首次运行时在 exe 旁边创建，不要打进发布包。
+第一条 publish 是大版本包；第二条只改 `--self-contained false`，出来的单个 exe 约 1.3 MB（打包后 0.35 MB），里面只有程序自己的代码，WPF 和运行时从机器的 `Microsoft.WindowsDesktop.App` 取。两种包共用同一份代码，发布时只是多一个 publish 目录，不打第二个 tag。
+
+大版本的发布结果是 `DeskHoper.exe` + 5 个 WPF 原生 dll，**整个文件夹一起拷走**（原生 dll 留在 exe 旁边，运行时不再往临时目录解压）；slim 包只打那一个 exe，`.pdb` 两种都不带。多语言资源只保留 `zh-Hans`（写在 csproj 的 `<SatelliteResourceLanguages>` 里，不用命令行重复指定），省 14 MB。配置目录 `DeskHoper-config` 由程序首次运行时在 exe 旁边创建，不要打进发布包。
 
 ## 测试
 
@@ -198,6 +209,12 @@ dotnet run --project DeskHoper.Tests/DeskHoper.Tests.csproj -c Debug
 ## 版本历史
 
 发布记录见 [Releases](https://github.com/zhengnan365/DeskHoper/releases)。版本号写在 `DeskHoper.csproj` 的 `<Version>`，每个发布打同名 git tag，程序标题右侧会把当前版本号显示出来，方便确认自己跑的是哪一版。
+
+### v2.2.4
+
+- **保持不息屏**：「显示器控制」新增开关，阻止系统自动关闭显示器，专治 Type-C 息屏后认不回来。接交流电才生效，笔记本用电池时自动放行省电
+- **两个包**：`-slim` 0.35 MB（要机器上有 .NET 8 桌面运行时）和默认包 58.3 MB（运行时打进 exe，什么都不用装），同一份代码同一个提交
+- 标题右侧显示当前版本号
 
 ## 贡献
 
