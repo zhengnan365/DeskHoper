@@ -219,7 +219,7 @@ sendStates.Clear();
 var receiveStates = new List<string>();
 xferB.ReceiveProgress += text => receiveStates.Add(text);
 Assert(await xferA.SendFilesAsync([xferTextPath, xferBigPath]), "同意后两个文件都必须传完");
-Assert(sendStates[0] == "等待对端接收…", "同意后仍要先报等待接收，界面才知道还没开始传字节");
+Assert(sendStates.Count > 0 && sendStates[0] == "等待对端接收…", $"同意后仍要先报等待接收，界面才知道还没开始传字节（链路错误：{xferA.LastError ?? "无"}）");
 var percents = sendStates.Where(state => state.StartsWith("发送中 "))
     .Select(state => int.Parse(state["发送中 ".Length..].TrimEnd('%'))).ToList();
 Assert(percents.Count > 0 && percents[0] == 0 && percents[^1] == 100, "进度必须从 0% 一路报到 100%");
@@ -231,7 +231,7 @@ var receivePercents = receiveStates.Where(state => state.StartsWith("接收中 "
     .Select(state => int.Parse(state["接收中 ".Length..].TrimEnd('%'))).ToList();
 Assert(receivePercents.Count > 0 && receivePercents[^1] == 100, "接收端必须报出进度，并且收完时到 100%");
 Assert(receivePercents.Zip(receivePercents.Skip(1), (from, to) => to >= from).All(monotonic => monotonic), "接收百分比不能倒退");
-Assert(receiveStates.Last().StartsWith("已接收 "), "接收完要给一句带总量的终态，不然界面一直停在 100%");
+Assert(receiveStates.Count > 0 && receiveStates.Last().StartsWith("已接收 "), "接收完要给一句带总量的终态，不然界面一直停在 100%");
 // ---------- 键鼠转发：帧格式，以及"没放行就绝不能进注入路径" ----------
 var keyboardDown = InputPayload.ReadKeyboard(InputPayload.Write(new KeyboardInput(true, true, 0x7B, 0x1D)));
 Assert(keyboardDown is { IsDown: true, IsExtended: true, VirtualKey: 0x7B, ScanCode: 0x1D }, "键盘帧必须原样往返，扩展键标志不能丢");
@@ -288,6 +288,10 @@ foreach (var segment in segments)
 }
 Assert(!PhysicalNetwork.IsOnLocalSegment(IPAddress.Parse("240.1.2.3")), "保留地址段不可能和物理网卡同网段，落在这里说明掩码算错了");
 Assert(!segments.Any(segment => segment.Address.ToString().StartsWith("169.")), "没拿到 DHCP 的 169.254 临时地址不能报出去");
+Assert(KeepDisplayAwakeService.ShouldHold(true, 1), "接交流电时显示器常亮开关必须生效");
+Assert(!KeepDisplayAwakeService.ShouldHold(true, 0), "笔记本电池供电时要放行息屏省电，开关开着也不拦");
+Assert(KeepDisplayAwakeService.ShouldHold(true, 255), "台式机压根没有电池，AcLineStatus=255 不能被当成没电，否则这功能在台式机上永远不生效");
+Assert(!KeepDisplayAwakeService.ShouldHold(false, 1), "开关关掉就不该拦息屏");
 if (failures.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, failures));
 Console.WriteLine("Projection mode contract tests passed.");
 Console.WriteLine("Per-monitor profile contract tests passed.");
@@ -297,6 +301,7 @@ Console.WriteLine("Peer pairing and encrypted link contract tests passed.");
 Console.WriteLine("File transfer and receive-path safety contract tests passed.");
 Console.WriteLine("Keyboard and mouse forwarding gate contract tests passed.");
 Console.WriteLine("Physical-NIC-only address selection contract tests passed.");
+Console.WriteLine("Display keep-awake power-state contract tests passed.");
 
 void Assert(bool condition, string message) { if (!condition) failures.Add(message); }
 

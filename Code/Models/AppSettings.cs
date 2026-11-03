@@ -10,6 +10,7 @@ public sealed record AppSettings
     public bool StartWithWindows { get; init; }
     public bool StartMinimized { get; init; }
     public bool ShowSuccessNotifications { get; init; } = true;
+    public bool KeepDisplayAwake { get; init; }
 
     public MonitorInputMapping GetInputMapping(string monitorId) => MonitorInputOverrides.TryGetValue(monitorId, out var mapping) ? mapping : DefaultInputMapping;
 }

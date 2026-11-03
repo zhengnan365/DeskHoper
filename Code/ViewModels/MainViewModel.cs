@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Net.Sockets;
+using System.Reflection;
 using MonitorSwitch.Models;
 using MonitorSwitch.Services;
 
@@ -42,6 +43,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SetMonitorInputCommand = new AsyncRelayCommand(parameter => parameter is MonitorInputRequest request ? request.Monitor.SetInputValueAsync(request.Value) : Task.CompletedTask);
         SetProjectionModeCommand = new AsyncRelayCommand(parameter => parameter is ProjectionMode mode ? SetProjectionAsync(mode) : Task.CompletedTask);
         IdentifyMonitorsCommand = new AsyncRelayCommand(IdentifyMonitorsAsync);
+        ToggleKeepDisplayAwakeCommand = new AsyncRelayCommand(ToggleKeepDisplayAwakeAsync);
         SelectSectionCommand = new AsyncRelayCommand(parameter => { if (parameter is string name && Enum.TryParse<AppSection>(name, out var section)) { ActiveSection = section; if (section == AppSection.Sharing) { EnsureLocalIpAddressDetected(); _ = StartDiscoveryIfNeededAsync(); } } return Task.CompletedTask; });
         GeneratePairingCodeCommand = new AsyncRelayCommand(GeneratePairingCodeAsync);
         CancelPairingCodeCommand = new AsyncRelayCommand(CancelPairingCodeAsync);
@@ -82,7 +84,49 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string CurrentStatusText => Status;
     public bool IsRefreshing { get => _isRefreshing; private set => SetProperty(ref _isRefreshing, value); }
     private void UpdateSteadyStateStatus() { Status = CurrentProfile is not null ? $"当前：{CurrentProfile.DisplayName}" : Monitors.Any(m => m.IsDdcSupported && m.CurrentInputValue.HasValue) ? "当前：自定义组合" : "已就绪"; }
+    /// SDK 会往 InformationalVersion 后面追加 +<git sha>，界面上只要版本号。
+    public string AppVersion { get; } = "v" + (typeof(MainViewModel).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0").Split('+')[0];
+
     private readonly PeerSettingsService _peerSettingsService = new();
+    private readonly SettingsService _appSettingsService = new();
+    private readonly KeepDisplayAwakeService _keepDisplayAwakeService = new();
+    private bool _keepDisplayAwake;
+
+    public bool KeepDisplayAwake { get => _keepDisplayAwake; private set { if (SetProperty(ref _keepDisplayAwake, value)) OnPropertyChanged(nameof(KeepDisplayAwakeHint)); } }
+
+    /// 开关说的是"用户要不要"，生效说的是"现在拦不拦"：笔记本拔了电源就该放行息屏省电。
+    /// 按钮高亮但没生效时，得有个地方讲清楚，不然用户以为已经常亮了。
+    public string KeepDisplayAwakeHint => !KeepDisplayAwake
+        ? "阻止系统关闭显示器。Type-C 接的显示器息屏后常常认不回来，开着它再切换。笔记本用电池时自动不生效。"
+        : _keepDisplayAwakeService.IsHolding ? "已生效：系统不会自动关闭显示器" : "已开启，但电池供电中暂不生效（插上电源自动恢复）";
+
+    public AsyncRelayCommand ToggleKeepDisplayAwakeCommand { get; }
+
+    /// 启动时由界面把 settings.json 里的选择交回来，这里只负责落到系统执行状态上。
+    public void ApplyKeepDisplayAwake(bool enabled)
+    {
+        _keepDisplayAwakeService.Apply(enabled);
+        KeepDisplayAwake = enabled;
+    }
+
+    /// 电源插拔靠界面那边的 10 秒轮询重算；只在生效状态真的变了时才通知，别每跳都刷一遍绑定。
+    public void RefreshKeepDisplayAwake()
+    {
+        var wasHolding = _keepDisplayAwakeService.IsHolding;
+        _keepDisplayAwakeService.Refresh();
+        if (wasHolding != _keepDisplayAwakeService.IsHolding) OnPropertyChanged(nameof(KeepDisplayAwakeHint));
+    }
+
+    private async Task ToggleKeepDisplayAwakeAsync()
+    {
+        var next = !KeepDisplayAwake;
+        _keepDisplayAwakeService.Apply(next);
+        KeepDisplayAwake = next;
+        Status = next ? _keepDisplayAwakeService.IsHolding ? "显示器常亮已开启" : "显示器常亮已开启，电池供电时暂不生效" : "显示器常亮已关闭";
+        try { await _appSettingsService.SaveAsync(await _appSettingsService.LoadAsync() with { KeepDisplayAwake = next }); }
+        catch (Exception ex) { _ = AppLogger.ErrorAsync("保存显示器常亮设置失败", ex); }
+    }
+
     private PeerLink? _peerLink;
     /// 对端推来的剪贴板文本。由界面赋值，实现自己负责切回 UI 线程。
     public Action<string>? RemoteClipboardTextHandler { get; set; }
@@ -820,6 +864,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public async Task ShutdownAsync(TimeSpan timeout)
     {
         _lifetimeCancellation.Cancel();
+        // 必须在任何 await 之前、也就是还在 UI 线程上释放：执行状态是按线程记的。
+        _keepDisplayAwakeService.Dispose();
         if (_identificationPresenter is IDisposable presenter) presenter.Dispose();
         StopForwarding();
         if (_discovery is not null) { var discovery = _discovery; _discovery = null; await discovery.DisposeAsync(); }

@@ -4,7 +4,7 @@
 
 不需要装服务端，不需要账号。两台机器各跑一个 exe，在同一个局域网里就能用。
 
-![平台](https://img.shields.io/badge/平台-Windows%2010%20%2F%2011-0078D4) ![运行时](https://img.shields.io/badge/.NET%208-Self--Contained-512BD4) ![许可](https://img.shields.io/badge/许可-MIT-green) [![最新下载](https://img.shields.io/badge/下载-v2.2.3-orange)](https://github.com/zhengnan365/DeskHoper/releases/latest)
+![平台](https://img.shields.io/badge/平台-Windows%2010%20%2F%2011-0078D4) ![运行时](https://img.shields.io/badge/.NET%208-Self--Contained-512BD4) ![许可](https://img.shields.io/badge/许可-MIT-green) [![最新下载](https://img.shields.io/badge/下载-v2.2.4-orange)](https://github.com/zhengnan365/DeskHoper/releases/latest)
 
 <img src="docs/images/screen-switch.png" alt="屏幕切换主界面" width="460">
 
@@ -60,7 +60,7 @@
 
 - **快速切换**：两张卡片对应两套接线（台式机 / 笔记本），点一下按每台显示器分别切到该卡片记录的输入源，当前生效的那张有蓝框和绿点。
 - **投影模式**：仅电脑屏幕 / 复制 / 扩展 / 仅第二屏幕。
-- **显示器控制**：逐台读取当前输入源，可单独切 DP / Type-C / HDMI。接线换了就点「学习输入源」重新认一遍；「标识」让屏幕闪编号，方便对上是哪一台。
+- **显示器控制**：逐台读取当前输入源，可单独切 DP / Type-C / HDMI。接线换了就点「学习输入源」重新认一遍；「标识」让屏幕闪编号，方便对上是哪一台；「保持不息屏」阻止系统自动关闭显示器——Type-C 接的显示器息屏后往往要先切到 DP/HDMI 才认得回来，开着它就不会走到那一步。笔记本用电池时自动不生效，免得白白耗电。
 - 显示器名字双击可改；卡片名字双击进入「编辑输入源和投影模式」。
 
 ### 文件共享
@@ -133,7 +133,7 @@
 | --- | --- |
 | `profiles.json` | 切换场景（每台显示器的输入源 + 投影模式） |
 | `monitors.json` | 每台显示器的输入映射、自定义名称、排序 |
-| `settings.json` | 输入源默认映射、关闭时的行为等应用设置 |
+| `settings.json` | 输入源默认映射、关闭时的行为、显示器常亮等应用设置 |
 | `peer.json` | 本机名称、已信任的对端指纹、接收目录、键鼠模式 |
 | `接收文件/` | 默认接收目录，可由 `peer.json` 里的 `ReceiveDirectory` 改走 |
 | `logs/` | 运行日志 `deskhoper-YYYYMMDD.log` |
@@ -147,7 +147,8 @@
 | 设备列表一直是空的 | 两台防火墙是否放行「专用网络」；是否都停在文件共享页；是否在同一个网段 |
 | 本机地址看着不对 | 多半是虚拟网卡的段。程序只认物理网卡，仍不对就看日志里 `LAN discovery` 那几行 |
 | 点了切换屏幕没反应 | 在显示器 OSD 菜单里确认 DDC/CI 已开启；卡片上标「DDC不可用」说明这台显示器不响应写入 |
-| 切完显示「未知输入源」 | 输入源刚切完的一瞬间 DDC 可能读到瞬时值，过一会儿会自己校正 |
+| 切完显示「未知输入源」 | 输入源刚切完的一瞬间 DDC 可能读到瞬时值，程序会在 10 秒内自动补读校正 |
+| Type-C 那台息屏后认不回来 | 先把「保持不息屏」打开再切换；已经睡死的话只能先切到 DP/HDMI 把它唤醒。若开着它仍会息屏，去显示器 OSD 里查 Standby Mode / Auto Source——那是面板自己的深度待机，Windows 管不到 |
 | 鼠标发飘、手感带曲线 | 对面关掉「提高指针精确度」，它的非线性曲线会叠加在转发位移上 |
 | 键鼠转发失效 | 被控端弹了 UAC 提权窗，或目标窗口以管理员身份运行——普通权限进程注入不进去，页面上会显示错误 |
 | 传文件报上限 | 单次 200 个文件、总量 512 MB，超了不会开始发送 |
@@ -192,15 +193,15 @@ dotnet publish DeskHoper.csproj -c Release -r win-x64 --self-contained true -p:P
 dotnet run --project DeskHoper.Tests/DeskHoper.Tests.csproj -c Debug
 ```
 
-8 组契约测试：投影模式、逐台 Profile、显示器偏好与输入源学习、切换按钮编辑、配对与加密链路、文件传输与接收路径安全、键鼠转发闸门、只走物理网卡的地址选择。
+9 组契约测试：投影模式、逐台 Profile、显示器偏好与输入源学习、切换按钮编辑、配对与加密链路、文件传输与接收路径安全、键鼠转发闸门、只走物理网卡的地址选择、显示器常亮的电源状态判断。
 
 ## 版本历史
 
-发布记录见 [Releases](https://github.com/zhengnan365/DeskHoper/releases)。版本号写在 `DeskHoper.csproj` 的 `<Version>`，每个发布打同名 git tag。
+发布记录见 [Releases](https://github.com/zhengnan365/DeskHoper/releases)。版本号写在 `DeskHoper.csproj` 的 `<Version>`，每个发布打同名 git tag，程序标题右侧会把当前版本号显示出来，方便确认自己跑的是哪一版。
 
 ## 贡献
 
-改代码前后各跑一次 `dotnet build DeskHoper.sln` 和上面那条测试命令，两边都要 0 警告、8 组全过。屏幕切换相关的改动需要一台真机加支持 DDC/CI 的外接显示器才能验证，纯代码评审测不出来。
+改代码前后各跑一次 `dotnet build DeskHoper.sln` 和上面那条测试命令，两边都要 0 警告、9 组全过。屏幕切换相关的改动需要一台真机加支持 DDC/CI 的外接显示器才能验证，纯代码评审测不出来。
 
 ## 许可
 
